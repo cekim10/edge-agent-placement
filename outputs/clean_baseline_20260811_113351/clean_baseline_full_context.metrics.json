@@ -1,0 +1,20 @@
+{
+  "label": "clean_baseline_full_context",
+  "placement": [
+    "cloud",
+    "cloud",
+    "cloud"
+  ],
+  "context_mode": "full_context",
+  "elapsed_s": 0.001572042005136609,
+  "mean_stage_latency_s": {
+    "triage": 9.478147452076276e-07,
+    "diagnose": 4.757700177530448e-07,
+    "report": 5.347343782583872e-07
+  },
+  "n": 12,
+  "accuracy": 0.0,
+  "partial_score": 1.0,
+  "avoid_rate": 1.0,
+  "records_path": "/Users/cekim/Documents/New project/edge-agent-placement/outputs/clean_baseline_20260811_113351/clean_baseline_full_context.jsonl"
+}

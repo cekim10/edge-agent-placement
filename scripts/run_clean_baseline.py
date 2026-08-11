@@ -22,12 +22,13 @@ def main() -> int:
     parser.add_argument("--context-mode", choices=["full_context", "summary_only"], default="full_context")
     parser.add_argument("--threshold", type=float, default=0.80)
     parser.add_argument("--timeout-s", type=float, default=120.0)
+    parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--mock", action="store_true", help="Use deterministic local mock instead of vLLM")
     parser.add_argument("--no-fail", action="store_true", help="Do not return non-zero below threshold")
     args = parser.parse_args()
 
     incidents = load_incidents(args.data)
-    client = build_client(mock=args.mock, timeout_s=args.timeout_s)
+    client = build_client(mock=args.mock, timeout_s=args.timeout_s, max_tokens=args.max_tokens)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     metrics = run_experiment(
         incidents=incidents,

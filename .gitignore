@@ -1,2 +1,5 @@
 .DS_Store
-
+outputs/*
+!outputs/.gitkeep
+__pycache__/
+*.pyc

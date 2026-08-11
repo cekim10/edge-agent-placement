@@ -65,6 +65,7 @@ Clean baseline:
 ```bash
 python3 scripts/run_clean_baseline.py
 python3 scripts/run_clean_baseline.py --timeout-s 10
+python3 scripts/run_clean_baseline.py --timeout-s 180 --max-tokens 128
 ```
 
 Stage sensitivity:

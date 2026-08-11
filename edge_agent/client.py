@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -50,7 +51,7 @@ class VLLMClient:
         endpoints: dict[str, Endpoint] | None = None,
         timeout_s: float = 120.0,
         temperature: float = 0.0,
-        max_tokens: int = 700,
+        max_tokens: int = 256,
     ) -> None:
         self.endpoints = endpoints or DEFAULT_ENDPOINTS
         self.timeout_s = timeout_s
@@ -65,7 +66,7 @@ class VLLMClient:
         messages: list[dict[str, str]],
         incident: dict[str, Any] | None = None,
     ) -> str:
-        del stage, incident
+        del incident
         endpoint = self.endpoints[tier]
         url = endpoint.base_url.rstrip("/") + "/chat/completions"
         payload = {
@@ -86,8 +87,18 @@ class VLLMClient:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
                 body = json.loads(response.read().decode("utf-8"))
+        except socket.timeout as exc:
+            raise RuntimeError(
+                f"Timed out calling {tier} {stage} endpoint {url} after {self.timeout_s:.1f}s "
+                f"with max_tokens={self.max_tokens}"
+            ) from exc
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"Timed out calling {tier} {stage} endpoint {url} after {self.timeout_s:.1f}s "
+                f"with max_tokens={self.max_tokens}"
+            ) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"Failed to call {tier} endpoint {url}: {exc}") from exc
+            raise RuntimeError(f"Failed to call {tier} {stage} endpoint {url}: {exc}") from exc
         elapsed = time.perf_counter() - started
         if not body.get("choices"):
             raise RuntimeError(f"Empty response from {tier} endpoint after {elapsed:.2f}s")
@@ -147,5 +158,9 @@ class MockClient:
         )
 
 
-def build_client(mock: bool = False, timeout_s: float = 120.0) -> ChatClient:
-    return MockClient() if mock else VLLMClient(timeout_s=timeout_s)
+def build_client(
+    mock: bool = False,
+    timeout_s: float = 120.0,
+    max_tokens: int = 256,
+) -> ChatClient:
+    return MockClient() if mock else VLLMClient(timeout_s=timeout_s, max_tokens=max_tokens)

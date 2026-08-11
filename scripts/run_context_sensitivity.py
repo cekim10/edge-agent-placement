@@ -21,11 +21,12 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs")
     parser.add_argument("--placement", default="cloud,cloud,cloud")
     parser.add_argument("--timeout-s", type=float, default=120.0)
+    parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--mock", action="store_true", help="Use deterministic local mock instead of vLLM")
     args = parser.parse_args()
 
     incidents = load_incidents(args.data)
-    client = build_client(mock=args.mock, timeout_s=args.timeout_s)
+    client = build_client(mock=args.mock, timeout_s=args.timeout_s, max_tokens=args.max_tokens)
     placement = parse_placement(args.placement)
     run_dir = args.output_dir / f"context_sensitivity_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 

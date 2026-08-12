@@ -75,6 +75,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.max_tokens < 64:
+        print(
+            "WARNING: --max-tokens below 64 is intended only for timeout smoke tests; "
+            "quality scores may be meaningless.",
+            flush=True,
+        )
+
     data_dir = _resolve_data_dir(args)
     records = load_cti_realm_records(data_dir, args.dataset_size, limit=args.limit)
     client = CTIMockClient() if args.mock else build_client(

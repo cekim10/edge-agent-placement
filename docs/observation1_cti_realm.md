@@ -58,7 +58,8 @@ python3 scripts/run_cti_observation1.py \
   --max-tokens 256
 ```
 
-Fast server smoke test:
+Fast server smoke test. This only checks that all five stages complete; do
+not interpret the quality score from this run.
 
 ```bash
 python3 scripts/run_cti_observation1.py \
@@ -82,6 +83,22 @@ python3 scripts/run_cti_observation1.py \
   --timeout-s 300 \
   --max-tokens 16
 ```
+
+Quality run after smoke passes:
+
+```bash
+python3 scripts/run_cti_observation1.py \
+  --aces-root ~/ACESEvals \
+  --dataset-size 25 \
+  --limit 1 \
+  --only-placement all_cloud \
+  --timeout-s 300 \
+  --max-tokens 64
+```
+
+If all-cloud proxy quality is still near zero, stop and inspect the JSONL output
+before running the full placement matrix. Observation 1 is only meaningful after
+the all-cloud run produces non-zero MITRE/data-source hits.
 
 Local smoke test without vLLM:
 

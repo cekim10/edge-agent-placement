@@ -93,12 +93,19 @@ python3 scripts/run_cti_observation1.py \
   --limit 1 \
   --only-placement all_cloud \
   --timeout-s 300 \
-  --max-tokens 64
+  --max-tokens 64 \
+  --kql-max-tokens 16 \
+  --rule-max-tokens 16
 ```
 
 If all-cloud proxy quality is still near zero, stop and inspect the JSONL output
 before running the full placement matrix. Observation 1 is only meaningful after
 the all-cloud run produces non-zero MITRE/data-source hits.
+
+The default quality run keeps C0-C2 at `--max-tokens` while capping C3/C4 with
+`--kql-max-tokens` and `--rule-max-tokens`; this avoids Qwen/vLLM stalls in
+long KQL/rule-generation completions while preserving the stage outputs used
+for MITRE and data-source scoring.
 
 Local smoke test without vLLM:
 

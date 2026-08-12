@@ -66,6 +66,8 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs")
     parser.add_argument("--timeout-s", type=float, default=180.0)
     parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument("--kql-max-tokens", type=int, default=16)
+    parser.add_argument("--rule-max-tokens", type=int, default=16)
     parser.add_argument("--mock", action="store_true")
     parser.add_argument(
         "--only-placement",
@@ -84,10 +86,15 @@ def main() -> int:
 
     data_dir = _resolve_data_dir(args)
     records = load_cti_realm_records(data_dir, args.dataset_size, limit=args.limit)
+    stage_max_tokens = {
+        "kql_development": args.kql_max_tokens,
+        "rule_generation": args.rule_max_tokens,
+    }
     client = CTIMockClient() if args.mock else build_client(
         mock=False,
         timeout_s=args.timeout_s,
         max_tokens=args.max_tokens,
+        max_tokens_by_stage=stage_max_tokens,
     )
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

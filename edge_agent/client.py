@@ -52,11 +52,13 @@ class VLLMClient:
         timeout_s: float = 120.0,
         temperature: float = 0.0,
         max_tokens: int = 256,
+        max_tokens_by_stage: dict[str, int] | None = None,
     ) -> None:
         self.endpoints = endpoints or DEFAULT_ENDPOINTS
         self.timeout_s = timeout_s
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.max_tokens_by_stage = max_tokens_by_stage or {}
 
     def chat(
         self,
@@ -69,12 +71,13 @@ class VLLMClient:
         del incident
         endpoint = self.endpoints[tier]
         url = endpoint.base_url.rstrip("/") + "/chat/completions"
+        request_max_tokens = self.max_tokens_by_stage.get(stage, self.max_tokens)
         payload = {
             "model": endpoint.model,
             "messages": messages,
             "temperature": self.temperature,
             "top_p": 1.0,
-            "max_tokens": self.max_tokens,
+            "max_tokens": request_max_tokens,
         }
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
@@ -90,12 +93,12 @@ class VLLMClient:
         except socket.timeout as exc:
             raise RuntimeError(
                 f"Timed out calling {tier} {stage} endpoint {url} after {self.timeout_s:.1f}s "
-                f"with max_tokens={self.max_tokens}"
+                f"with max_tokens={request_max_tokens}"
             ) from exc
         except TimeoutError as exc:
             raise RuntimeError(
                 f"Timed out calling {tier} {stage} endpoint {url} after {self.timeout_s:.1f}s "
-                f"with max_tokens={self.max_tokens}"
+                f"with max_tokens={request_max_tokens}"
             ) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Failed to call {tier} {stage} endpoint {url}: {exc}") from exc
@@ -162,5 +165,10 @@ def build_client(
     mock: bool = False,
     timeout_s: float = 120.0,
     max_tokens: int = 256,
+    max_tokens_by_stage: dict[str, int] | None = None,
 ) -> ChatClient:
-    return MockClient() if mock else VLLMClient(timeout_s=timeout_s, max_tokens=max_tokens)
+    return MockClient() if mock else VLLMClient(
+        timeout_s=timeout_s,
+        max_tokens=max_tokens,
+        max_tokens_by_stage=max_tokens_by_stage,
+    )

@@ -38,6 +38,10 @@ STAGE_LABELS = {
     "rule_generation": "Rule generation",
 }
 
+MAX_OBJECTIVE_CHARS = 1600
+MAX_PRIOR_CHARS = 1200
+MAX_PRIOR_STAGE_CHARS = 320
+
 
 @dataclass(frozen=True)
 class CTIRecord:
@@ -142,24 +146,32 @@ def placement_name(placement: tuple[str, ...]) -> str:
     return "edge_" + "_".join(edge)
 
 
+def _clip(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "\n[TRUNCATED]"
+
+
 def _system_prompt() -> str:
     return (
         "You are a deterministic security detection engineer. Use only the "
-        "provided detection objective and prior stage outputs. Prefer concise "
-        "JSON-like answers. Do not invent telemetry that was not provided."
+        "provided detection objective and prior stage outputs. Return compact JSON. "
+        "Do not invent telemetry that was not provided."
     )
 
 
 def _prior_block(stage_outputs: list[CTIStageResult]) -> str:
     if not stage_outputs:
         return "None"
-    return "\n\n".join(
-        f"{result.stage.upper()} OUTPUT:\n{result.output}" for result in stage_outputs
+    block = "\n\n".join(
+        f"{result.stage.upper()} OUTPUT:\n{_clip(result.output, MAX_PRIOR_STAGE_CHARS)}"
+        for result in stage_outputs
     )
+    return _clip(block, MAX_PRIOR_CHARS)
 
 
 def _messages_for_stage(record: CTIRecord, stage: str, stage_outputs: list[CTIStageResult]) -> list[dict[str, str]]:
-    objective = record.detection_objective
+    objective = _clip(record.detection_objective, MAX_OBJECTIVE_CHARS)
     platform = record.platform
     prior = _prior_block(stage_outputs)
 
@@ -214,18 +226,29 @@ def run_cti_workflow(
     incident = record.to_incident()
     results: list[CTIStageResult] = []
     for stage, tier in zip(CTI_STAGES, placement):
+        messages = _messages_for_stage(record, stage, results)
+        prompt_chars = sum(len(message["content"]) for message in messages)
+        print(
+            f"  stage_start stage={stage} tier={tier} prompt_chars={prompt_chars}",
+            flush=True,
+        )
         started = time.perf_counter()
         output = client.chat(
             tier=tier,
             stage=stage,
-            messages=_messages_for_stage(record, stage, results),
+            messages=messages,
             incident=incident,
+        )
+        latency_s = time.perf_counter() - started
+        print(
+            f"  stage_done stage={stage} tier={tier} latency_s={latency_s:.2f} output_chars={len(output)}",
+            flush=True,
         )
         results.append(
             CTIStageResult(
                 stage=stage,
                 tier=tier,
-                latency_s=time.perf_counter() - started,
+                latency_s=latency_s,
                 output=output,
             )
         )

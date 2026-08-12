@@ -67,6 +67,12 @@ def main() -> int:
     parser.add_argument("--timeout-s", type=float, default=180.0)
     parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--mock", action="store_true")
+    parser.add_argument(
+        "--only-placement",
+        choices=["all_cloud", *CTI_STAGES],
+        default=None,
+        help="Run only all_cloud or one edge-stage variant for smoke tests",
+    )
     args = parser.parse_args()
 
     data_dir = _resolve_data_dir(args)
@@ -81,7 +87,7 @@ def main() -> int:
     run_dir = args.output_dir / f"cti_observation1_{stamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    edge_stage_variants = ["all_cloud", *CTI_STAGES]
+    edge_stage_variants = [args.only_placement] if args.only_placement else ["all_cloud", *CTI_STAGES]
     metrics = []
     for edge_stage in edge_stage_variants:
         placement = placement_for_edge_stage(edge_stage)

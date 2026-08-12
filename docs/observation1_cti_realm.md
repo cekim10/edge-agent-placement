@@ -58,6 +58,18 @@ python3 scripts/run_cti_observation1.py \
   --max-tokens 256
 ```
 
+Fast server smoke test:
+
+```bash
+python3 scripts/run_cti_observation1.py \
+  --aces-root ~/ACESEvals \
+  --dataset-size 25 \
+  --limit 1 \
+  --only-placement all_cloud \
+  --timeout-s 300 \
+  --max-tokens 32
+```
+
 Local smoke test without vLLM:
 
 ```bash

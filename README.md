@@ -99,3 +99,13 @@ Metrics:
 - `partial_score`: fraction of `must_include` groups hit
 - `must_hits`: per-group matched synonyms
 - `avoid_hits`: forbidden main-cause terms found in the root-cause section
+
+
+## CTI-REALM Observation 1
+
+The cyber-defense stage-sensitivity prototype is documented in
+`docs/observation1_cti_realm.md`.
+
+```bash
+python3 scripts/run_cti_observation1.py --aces-root ~/ACESEvals --dataset-size 25 --limit 5
+```

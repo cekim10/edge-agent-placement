@@ -38,9 +38,9 @@ STAGE_LABELS = {
     "rule_generation": "Rule generation",
 }
 
-MAX_OBJECTIVE_CHARS = 1600
-MAX_PRIOR_CHARS = 1200
-MAX_PRIOR_STAGE_CHARS = 320
+MAX_OBJECTIVE_CHARS = 1200
+MAX_PRIOR_CHARS = 800
+MAX_PRIOR_STAGE_CHARS = 220
 
 
 @dataclass(frozen=True)
@@ -155,8 +155,8 @@ def _clip(text: str, max_chars: int) -> str:
 def _system_prompt() -> str:
     return (
         "You are a deterministic security detection engineer. Use only the "
-        "provided detection objective and prior stage outputs. Return compact JSON. "
-        "Do not invent telemetry that was not provided."
+        "provided detection objective and prior stage outputs. Return compact JSON only. "
+        "Do not use markdown fences. Do not invent telemetry that was not provided."
     )
 
 
@@ -199,10 +199,9 @@ def _messages_for_stage(record: CTIRecord, stage: str, stage_outputs: list[CTISt
             "Return JSON with keys kql_query, detection_logic, expected_matches."
         ),
         "rule_generation": (
-            "Stage C4: detection rule generation.\n"
-            "Produce the final detection artifact. Include MITRE technique IDs, data sources, "
-            "a KQL query, and a Sigma-style rule summary.\n"
-            "Return JSON with keys mitre_techniques, data_sources, kql_query, sigma_rule, rationale."
+            "Stage C4: final compact detection summary.\n"
+            "Return only minified JSON with keys mitre_techniques, data_sources, kql_query. "
+            "Keep it under 80 tokens. No markdown. No prose."
         ),
     }
 

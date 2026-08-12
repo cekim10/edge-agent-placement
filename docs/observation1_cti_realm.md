@@ -70,6 +70,19 @@ python3 scripts/run_cti_observation1.py \
   --max-tokens 32
 ```
 
+If the final rule-generation stage stalls, retry the smoke with a smaller
+generation cap:
+
+```bash
+python3 scripts/run_cti_observation1.py \
+  --aces-root ~/ACESEvals \
+  --dataset-size 25 \
+  --limit 1 \
+  --only-placement all_cloud \
+  --timeout-s 300 \
+  --max-tokens 16
+```
+
 Local smoke test without vLLM:
 
 ```bash

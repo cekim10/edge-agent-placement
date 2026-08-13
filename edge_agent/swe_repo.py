@@ -30,6 +30,7 @@ from .client import ChatClient
 SWE_STAGES = ("issue_analysis", "patch_generation", "test_repair")
 
 MAX_ISSUE_CHARS = 1800
+MAX_TREE_CHARS = 3000
 MAX_CONTEXT_CHARS = 9000
 MAX_PRIOR_CHARS = 5000
 MAX_PATCH_CHARS = 12000
@@ -118,8 +119,12 @@ def _repo_tree(repo_path: Path) -> str:
     return "\n".join(paths)
 
 
+def _repo_tree_context(repo_path: Path) -> str:
+    return _clip(f"REPO_TREE:\n{_repo_tree(repo_path)}", MAX_TREE_CHARS)
+
+
 def _repo_context(repo_path: Path) -> str:
-    chunks = [f"REPO_TREE:\n{_repo_tree(repo_path)}"]
+    chunks = [_repo_tree_context(repo_path)]
     for path in sorted(repo_path.rglob("*.py")):
         if ".git" in path.parts or "__pycache__" in path.parts:
             continue
@@ -150,7 +155,7 @@ def messages_for_swe_stage(
     results: list[SWEStageResult],
 ) -> list[dict[str, str]]:
     issue = _clip(task.problem_statement, MAX_ISSUE_CHARS)
-    context = _repo_context(repo_path)
+    context = _repo_tree_context(repo_path) if stage == "issue_analysis" else _repo_context(repo_path)
     prior = _prior_block(results)
     system = (
         "You are a deterministic software engineering agent working on a real "
@@ -158,7 +163,7 @@ def messages_for_swe_stage(
     )
     if stage == "issue_analysis":
         user = (
-            "Stage A: analyze the GitHub issue and repository. Return compact JSON "
+            "Stage A: triage the GitHub issue using the repo tree. Return compact JSON "
             "with keys bug_summary, likely_files, fix_strategy, test_strategy. Do not write a patch.\n\n"
             f"ISSUE:\n{issue}\n\nREPOSITORY_CONTEXT:\n{context}"
         )

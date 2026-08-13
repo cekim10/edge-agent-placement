@@ -22,6 +22,9 @@ Fixed workflow:
 issue_analysis -> patch_generation -> test_repair
 ```
 
+Stage A sees only the repository tree and issue text for triage/localization.
+Patch generation and test repair receive the Python file context.
+
 Final quality:
 
 ```text

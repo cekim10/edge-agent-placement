@@ -23,7 +23,7 @@ issue_analysis -> patch_generation -> test_repair
 ```
 
 Stage A sees only the repository tree and issue text for triage/localization.
-Patch generation and test repair receive localized Python file context selected from Stage A `likely_files`. Stage B/C return compact edit JSON; the harness converts it to a unified diff before applying it.
+Patch generation and test repair receive localized Python line snippets selected from Stage A `likely_files` and issue line numbers. Stage B/C return compact edit JSON; the harness converts it to a unified diff before applying it.
 
 Final quality:
 

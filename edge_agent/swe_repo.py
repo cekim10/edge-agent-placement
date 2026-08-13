@@ -122,6 +122,39 @@ def _numbered_file_text(text: str, max_chars: int = 1600) -> str:
     return _clip(numbered, max_chars)
 
 
+def _issue_line_numbers(issue: str) -> list[int]:
+    line_numbers = [int(match) for match in re.findall(r"line\s+(\d+)", issue, flags=re.I)]
+    return [line for line in line_numbers if line > 0]
+
+
+def _issue_code_lines(issue: str) -> list[str]:
+    lines = []
+    for raw in issue.splitlines():
+        stripped = _sanitize_prompt_text(raw).strip()
+        if not stripped or stripped.startswith(("File ", "^", "SyntaxError")):
+            continue
+        if stripped.startswith(("def ", "return ", "class ", "import ", "from ")):
+            lines.append(stripped)
+    return lines[:6]
+
+
+def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 900) -> str:
+    lines = text.splitlines()
+    selected: set[int] = set()
+    for line_no in _issue_line_numbers(issue):
+        for index in range(max(1, line_no - radius), min(len(lines), line_no + radius) + 1):
+            selected.add(index)
+    for needle in _issue_code_lines(issue):
+        for index, line in enumerate(lines, start=1):
+            if needle in _sanitize_prompt_text(line):
+                for near in range(max(1, index - radius), min(len(lines), index + radius) + 1):
+                    selected.add(near)
+    if not selected:
+        selected = set(range(1, min(len(lines), 8) + 1))
+    numbered = "\n".join(f"L{index:03d}: {_sanitize_prompt_text(lines[index - 1])}" for index in sorted(selected))
+    return _clip(numbered, max_chars)
+
+
 def _repo_tree(repo_path: Path) -> str:
     paths = []
     for path in sorted(repo_path.rglob("*")):
@@ -201,7 +234,7 @@ def _localized_repo_context(repo_path: Path, results: list[SWEStageResult], issu
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        chunks.append(f"FILE: {rel}\n{_numbered_file_text(text)}")
+        chunks.append(f"FILE_SNIPPET: {rel}\n{_numbered_file_snippet(text, issue)}")
     return _clip("\n\n".join(chunks), MAX_LOCALIZED_CONTEXT_CHARS)
 
 
@@ -242,7 +275,7 @@ def messages_for_swe_stage(
     elif stage == "patch_generation":
         user = (
             "Edit selected files. Return a JSON object only. The object has key edits. "
-            "Each edit has keys file, find, replace. The find value must be exact text copied from a FILE block. "
+            "Each edit has keys file, find, replace. The find value must be exact text copied from a FILE_SNIPPET block. "
             "If unsure, return an empty edits list. No markdown.\n\n"
             f"ISSUE:\n{issue}\n\n{context}\n\nPRIOR:\n{prior}"
         )

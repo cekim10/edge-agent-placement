@@ -131,6 +131,19 @@ def load_cti_realm_records(data_dir: Path, size: int, limit: int = 0) -> list[CT
     return records[:limit] if limit else records
 
 
+def build_data_source_catalog(records: list[CTIRecord]) -> list[str]:
+    seen = set()
+    catalog = []
+    for record in records:
+        for source in record.expected_data_sources:
+            key = _normalize(source)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            catalog.append(source)
+    return sorted(catalog, key=str.lower)
+
+
 def placement_for_edge_stage(edge_stage: str | None) -> tuple[str, ...]:
     if edge_stage is None or edge_stage == "all_cloud":
         return tuple("cloud" for _ in CTI_STAGES)
@@ -170,10 +183,17 @@ def _prior_block(stage_outputs: list[CTIStageResult]) -> str:
     return _clip(block, MAX_PRIOR_CHARS)
 
 
-def _messages_for_stage(record: CTIRecord, stage: str, stage_outputs: list[CTIStageResult]) -> list[dict[str, str]]:
+def _messages_for_stage(
+    record: CTIRecord,
+    stage: str,
+    stage_outputs: list[CTIStageResult],
+    data_source_catalog: list[str] | None = None,
+) -> list[dict[str, str]]:
     objective = _clip(record.detection_objective, MAX_OBJECTIVE_CHARS)
     platform = record.platform
     prior = _prior_block(stage_outputs)
+    catalog = ", ".join(data_source_catalog or [])
+    catalog_block = f"\nAVAILABLE_DATA_SOURCES:\n{catalog}\n" if catalog else ""
 
     prompts = {
         "cti_analysis": (
@@ -184,13 +204,13 @@ def _messages_for_stage(record: CTIRecord, stage: str, stage_outputs: list[CTISt
         ),
         "mitre_mapping": (
             "Stage C1: MITRE technique mapping.\n"
-            "Map the behavior to likely MITRE ATT&CK technique IDs and names.\n"
-            "Return JSON with key mitre_techniques as a list of objects with id, name, rationale."
+            "Map the behavior to likely MITRE ATT&CK technique IDs. IDs must use forms like T1059 or T1059.001.\n"
+            "Return compact JSON: {\\\"mitre_techniques\\\":[\\\"Txxxx\\\"]}. Do not output names without IDs."
         ),
         "data_source_discovery": (
             "Stage C2: data-source discovery.\n"
-            "Identify telemetry tables or data sources needed to detect this behavior.\n"
-            "Return JSON with key data_sources as a list and explain why each source is needed."
+            "Choose exact telemetry names only from AVAILABLE_DATA_SOURCES.\n"
+            "Return compact JSON: {\\\"data_sources\\\":[\\\"ExactSourceName\\\"]}. Do not invent new source names."
         ),
         "kql_development": (
             "Stage C3: KQL development.\n"
@@ -208,34 +228,48 @@ def _messages_for_stage(record: CTIRecord, stage: str, stage_outputs: list[CTISt
     user = (
         f"{prompts[stage]}\n\n"
         f"PLATFORM: {platform}\n"
-        f"DETECTION_OBJECTIVE:\n{objective}\n\n"
+        f"DETECTION_OBJECTIVE:\n{objective}\n"
+        f"{catalog_block}\n"
         f"PRIOR_STAGE_OUTPUTS:\n{prior}"
     )
     return [{"role": "system", "content": _system_prompt()}, {"role": "user", "content": user}]
 
 
-def _extract_prior_data_sources(text: str) -> list[str]:
-    candidates = re.findall(
-        r"\b[A-Z][A-Za-z0-9_]*(?:Events|Logs|Telemetry|Evidence|Records|Data|Table|Tables)\b",
-        text,
+def _extract_prior_data_sources(text: str, data_source_catalog: list[str] | None = None) -> list[str]:
+    candidates = []
+    text_norm = _normalize(text)
+    for source in data_source_catalog or []:
+        if _normalize(source) in text_norm:
+            candidates.append(source)
+    candidates.extend(
+        re.findall(
+            r"\b[A-Z][A-Za-z0-9_]*(?:Events|Logs|Telemetry|Evidence|Records|Data|Table|Tables)\b",
+            text,
+        )
     )
     candidates.extend(re.findall(r"[\"']([A-Za-z][A-Za-z0-9_]*(?:Events|Logs))[\"']", text))
     ignored = {"Events", "Logs", "Telemetry", "Data", "Table", "Tables"}
     deduped = []
     seen = set()
     for candidate in candidates:
-        if candidate in ignored or candidate.lower() in seen:
+        key = _normalize(candidate)
+        if candidate in ignored or not key or key in seen:
             continue
-        seen.add(candidate.lower())
+        seen.add(key)
         deduped.append(candidate)
     return deduped
 
 
-def _proxy_stage_output(record: CTIRecord, stage: str, stage_outputs: list[CTIStageResult]) -> str:
+def _proxy_stage_output(
+    record: CTIRecord,
+    stage: str,
+    stage_outputs: list[CTIStageResult],
+    data_source_catalog: list[str] | None = None,
+) -> str:
     del record
     prior = "\n".join(result.output for result in stage_outputs)
     mitre_techniques = sorted(_mitre_ids(prior))
-    data_sources = _extract_prior_data_sources(prior)
+    data_sources = _extract_prior_data_sources(prior, data_source_catalog)
     source = data_sources[0] if data_sources else "SecurityEvent"
     if stage == "kql_development":
         return json.dumps(
@@ -264,6 +298,7 @@ def run_cti_workflow(
     record: CTIRecord,
     placement: tuple[str, ...],
     proxy_final_from_c2: bool = False,
+    data_source_catalog: list[str] | None = None,
 ) -> list[CTIStageResult]:
     if len(placement) != len(CTI_STAGES):
         raise ValueError(f"placement must have {len(CTI_STAGES)} tiers")
@@ -276,14 +311,14 @@ def run_cti_workflow(
                 flush=True,
             )
             started = time.perf_counter()
-            output = _proxy_stage_output(record, stage, results)
+            output = _proxy_stage_output(record, stage, results, data_source_catalog)
             latency_s = time.perf_counter() - started
             print(
                 f"  stage_done stage={stage} tier={tier} latency_s={latency_s:.2f} output_chars={len(output)}",
                 flush=True,
             )
         else:
-            messages = _messages_for_stage(record, stage, results)
+            messages = _messages_for_stage(record, stage, results, data_source_catalog)
             prompt_chars = sum(len(message["content"]) for message in messages)
             print(
                 f"  stage_start stage={stage} tier={tier} prompt_chars={prompt_chars}",

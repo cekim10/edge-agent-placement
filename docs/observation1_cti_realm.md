@@ -108,8 +108,10 @@ model-generated, while C3/C4 are compact deterministic pass-through outputs.
 This avoids Qwen/vLLM stalls in long KQL/rule-generation completions while
 preserving the MITRE/data-source scoring signal needed for the first
 stage-sensitivity figure. The proxy finalizer does not read ground truth; it
-only parses MITRE IDs and data-source names from prior model outputs. Do not
-use this as the final CTI-REALM C4 result.
+only parses MITRE IDs and data-source names from prior model outputs. C2 is
+given a dataset-wide data-source catalog, analogous to the official
+`list_kusto_tables` tool; it is not given per-task ground truth. Do not use
+this as the final CTI-REALM C4 result.
 
 Local smoke test without vLLM:
 

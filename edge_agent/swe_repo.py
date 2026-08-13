@@ -272,15 +272,19 @@ def messages_for_swe_stage(
     elif stage == "patch_generation":
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         user = (
-            "Return a JSON object only with key edits. Each edit has keys file, find, replace. "
+            "Return a JSON object only with key edits. Prefer edits with keys file, line, new. "
+            "Use the L001 number as line. The new value is the full replacement line without the L001 prefix. "
+            "Alternatively use file, find, replace with real code text and no L001 prefixes. "
             "If unsure return an empty edits list.\n\n"
             f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
     elif stage == "test_repair":
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         user = (
-            "Return a JSON object only with key edits. Each edit has keys file, find, replace. "
-            "Keep or improve the prior edit. If unsure return an empty edits list.\n\n"
+            "Return a JSON object only with key edits. Prefer edits with keys file, line, new. "
+            "Use the L001 number as line. The new value is the full replacement line without the L001 prefix. "
+            "Alternatively use file, find, replace with real code text and no L001 prefixes. Keep or improve the prior edit. "
+            "If unsure return an empty edits list.\n\n"
             f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
     else:
@@ -317,6 +321,10 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     return {}
 
 
+def _strip_prompt_line_numbers(text: str) -> str:
+    return "\n".join(re.sub(r"^L\d{3}:\s?", "", line) for line in text.splitlines())
+
+
 def _edit_plan_to_diff(repo_path: Path, text: str) -> str:
     parsed = _extract_json_object(text)
     edits = parsed.get("edits", [])
@@ -331,15 +339,31 @@ def _edit_plan_to_diff(repo_path: Path, text: str) -> str:
         if not isinstance(edit, dict):
             continue
         rel = str(edit.get("file", "")).strip().lstrip("./")
-        find = edit.get("find", "")
-        replace = edit.get("replace", "")
-        if not rel or not isinstance(find, str) or not isinstance(replace, str):
-            continue
         path = repo_path / rel
-        if not path.exists() or not path.is_file():
+        if not rel or not path.exists() or not path.is_file():
             continue
         original = original_by_file.setdefault(rel, path.read_text(encoding="utf-8"))
         current = updated_by_file.get(rel, original)
+
+        line_number = edit.get("line")
+        new_line = edit.get("new")
+        if isinstance(line_number, str) and line_number.strip().isdigit():
+            line_number = int(line_number.strip())
+        if isinstance(line_number, int) and isinstance(new_line, str):
+            current_lines = current.splitlines(keepends=True)
+            if 1 <= line_number <= len(current_lines):
+                old_line = current_lines[line_number - 1]
+                ending = "\n" if old_line.endswith("\n") else ""
+                current_lines[line_number - 1] = _strip_prompt_line_numbers(new_line).rstrip("\n") + ending
+                updated_by_file[rel] = "".join(current_lines)
+                continue
+
+        find = edit.get("find", "")
+        replace = edit.get("replace", "")
+        if not isinstance(find, str) or not isinstance(replace, str):
+            continue
+        find = _strip_prompt_line_numbers(find)
+        replace = _strip_prompt_line_numbers(replace)
         if find not in current:
             continue
         updated_by_file[rel] = current.replace(find, replace, 1)

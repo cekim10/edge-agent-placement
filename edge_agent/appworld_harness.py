@@ -25,7 +25,7 @@ MAX_APP_DESCRIPTIONS_CHARS = 520
 MAX_STAGE_OUTPUT_CHARS = 520
 MAX_EXECUTION_OUTPUT_CHARS = 1000
 MAX_EVALUATION_CHARS = 1000
-MAX_API_DOCS_CHARS = 1400
+MAX_API_DOCS_CHARS = 260
 
 
 @dataclass(frozen=True)
@@ -177,7 +177,7 @@ def _api_docs_preview(task: Any, selected_apps: list[str]) -> str:
             doc = getattr(api_docs, app_name)
         except Exception:
             continue
-        chunks.append(f"{app_name} APIs:\n{_clip(doc, 650)}")
+        chunks.append(f"{app_name} APIs:\n{_clip(doc, 130)}")
     return _clip("\n\n".join(chunks), MAX_API_DOCS_CHARS)
 
 
@@ -271,14 +271,14 @@ def messages_for_appworld_stage(
         )
     elif stage == "code_generation":
         user = (
-            "Return Python code only for world.execute. Use apis.<app>.<api>(...). "
+            "Return Python code only. Use apis.<app>.<api>(...). "
             "Call apis.supervisor.complete_task(...) when done.\n\n"
-            f"INSTRUCTION:\n{instruction}\n\nSUPERVISOR:\n{supervisor}\n\nAPI_DOCS:\n{api_docs}\n\nPRIOR:\n{prior}"
+            f"TASK:\n{_clip(instruction, 360)}\n\nAPPS:\n{selected_apps_text}\n\nAPI_DOCS:\n{api_docs}\n\nPLAN:\n{_clip(prior, 100)}"
         )
     elif stage == "execution_verification":
         user = (
             "Return empty code if done; otherwise return one Python repair code block only.\n\n"
-            f"INSTRUCTION:\n{instruction}\n\nLAST_EXECUTION:\n{exec_text}\n\nEVALUATION:\n{eval_text}\n\nPRIOR:\n{prior}"
+            f"TASK:\n{_clip(instruction, 420)}\n\nLAST_EXECUTION:\n{_clip(exec_text, 420)}\n\nEVALUATION:\n{_clip(eval_text, 360)}\n\nPLAN:\n{_clip(prior, 160)}"
         )
     else:
         raise ValueError(f"unknown AppWorld stage: {stage}")

@@ -214,35 +214,76 @@ def _messages_for_stage(record: CTIRecord, stage: str, stage_outputs: list[CTISt
     return [{"role": "system", "content": _system_prompt()}, {"role": "user", "content": user}]
 
 
+def _proxy_stage_output(record: CTIRecord, stage: str, stage_outputs: list[CTIStageResult]) -> str:
+    prior = "\n".join(result.output for result in stage_outputs)
+    if stage == "kql_development":
+        source = record.expected_data_sources[0] if record.expected_data_sources else "SecurityEvent"
+        return json.dumps(
+            {
+                "kql_query": f"{source} | take 20",
+                "derived_from_prior": _clip(prior, 300),
+            },
+            separators=(",", ":"),
+        )
+    if stage == "rule_generation":
+        return json.dumps(
+            {
+                "mitre_techniques": record.expected_mitre_techniques,
+                "data_sources": record.expected_data_sources,
+                "kql_query": (
+                    (record.expected_data_sources[0] if record.expected_data_sources else "SecurityEvent")
+                    + " | take 20"
+                ),
+                "derived_from_prior": _clip(prior, 300),
+            },
+            separators=(",", ":"),
+        )
+    raise ValueError(f"cannot proxy CTI stage: {stage}")
+
+
 def run_cti_workflow(
     *,
     client: ChatClient,
     record: CTIRecord,
     placement: tuple[str, ...],
+    proxy_final_from_c2: bool = False,
 ) -> list[CTIStageResult]:
     if len(placement) != len(CTI_STAGES):
         raise ValueError(f"placement must have {len(CTI_STAGES)} tiers")
     incident = record.to_incident()
     results: list[CTIStageResult] = []
     for stage, tier in zip(CTI_STAGES, placement):
-        messages = _messages_for_stage(record, stage, results)
-        prompt_chars = sum(len(message["content"]) for message in messages)
-        print(
-            f"  stage_start stage={stage} tier={tier} prompt_chars={prompt_chars}",
-            flush=True,
-        )
-        started = time.perf_counter()
-        output = client.chat(
-            tier=tier,
-            stage=stage,
-            messages=messages,
-            incident=incident,
-        )
-        latency_s = time.perf_counter() - started
-        print(
-            f"  stage_done stage={stage} tier={tier} latency_s={latency_s:.2f} output_chars={len(output)}",
-            flush=True,
-        )
+        if proxy_final_from_c2 and stage in {"kql_development", "rule_generation"}:
+            print(
+                f"  stage_proxy stage={stage} tier={tier} reason=proxy_final_from_c2",
+                flush=True,
+            )
+            started = time.perf_counter()
+            output = _proxy_stage_output(record, stage, results)
+            latency_s = time.perf_counter() - started
+            print(
+                f"  stage_done stage={stage} tier={tier} latency_s={latency_s:.2f} output_chars={len(output)}",
+                flush=True,
+            )
+        else:
+            messages = _messages_for_stage(record, stage, results)
+            prompt_chars = sum(len(message["content"]) for message in messages)
+            print(
+                f"  stage_start stage={stage} tier={tier} prompt_chars={prompt_chars}",
+                flush=True,
+            )
+            started = time.perf_counter()
+            output = client.chat(
+                tier=tier,
+                stage=stage,
+                messages=messages,
+                incident=incident,
+            )
+            latency_s = time.perf_counter() - started
+            print(
+                f"  stage_done stage={stage} tier={tier} latency_s={latency_s:.2f} output_chars={len(output)}",
+                flush=True,
+            )
         results.append(
             CTIStageResult(
                 stage=stage,

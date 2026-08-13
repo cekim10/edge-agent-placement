@@ -95,17 +95,19 @@ python3 scripts/run_cti_observation1.py \
   --timeout-s 300 \
   --max-tokens 64 \
   --kql-max-tokens 16 \
-  --rule-max-tokens 16
+  --rule-max-tokens 16 \
+  --proxy-final-from-c2
 ```
 
 If all-cloud proxy quality is still near zero, stop and inspect the JSONL output
 before running the full placement matrix. Observation 1 is only meaningful after
 the all-cloud run produces non-zero MITRE/data-source hits.
 
-The default quality run keeps C0-C2 at `--max-tokens` while capping C3/C4 with
-`--kql-max-tokens` and `--rule-max-tokens`; this avoids Qwen/vLLM stalls in
-long KQL/rule-generation completions while preserving the stage outputs used
-for MITRE and data-source scoring.
+The recommended Phase-A quality run uses `--proxy-final-from-c2`: C0-C2 are
+model-generated, while C3/C4 are compact deterministic pass-through outputs.
+This avoids Qwen/vLLM stalls in long KQL/rule-generation completions while
+preserving the MITRE/data-source scoring signal needed for the first
+stage-sensitivity figure. Do not use this as the final CTI-REALM C4 result.
 
 Local smoke test without vLLM:
 

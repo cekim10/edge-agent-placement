@@ -70,6 +70,11 @@ def main() -> int:
     parser.add_argument("--rule-max-tokens", type=int, default=16)
     parser.add_argument("--mock", action="store_true")
     parser.add_argument(
+        "--proxy-final-from-c2",
+        action="store_true",
+        help="Run C0-C2 with LLMs and synthesize C3-C4 to avoid KQL/rule-generation stalls",
+    )
+    parser.add_argument(
         "--only-placement",
         choices=["all_cloud", *CTI_STAGES],
         default=None,
@@ -111,7 +116,12 @@ def main() -> int:
         with records_path.open("w", encoding="utf-8") as handle:
             for index, record in enumerate(records, start=1):
                 print(f"[{label}] task {index}/{len(records)} {record.task_id}", flush=True)
-                stage_results = run_cti_workflow(client=client, record=record, placement=placement)
+                stage_results = run_cti_workflow(
+                    client=client,
+                    record=record,
+                    placement=placement,
+                    proxy_final_from_c2=args.proxy_final_from_c2,
+                )
                 score = score_cti_proxy(record, stage_results)
                 row = {
                     "task_id": record.task_id,

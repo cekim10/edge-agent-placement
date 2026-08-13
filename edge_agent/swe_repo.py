@@ -336,7 +336,8 @@ def messages_for_swe_stage(
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         user = (
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
-            "Use L001 as line number. One-line new value. Smallest edit. No whole-file rewrite. "
+            "Use line/new to replace one line, or after/insert to insert one line. "
+            "Smallest executable-code edit only. No whole-file rewrite. "
             'If unsure return {"edits":[]}.\n\n'
             f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
@@ -344,7 +345,7 @@ def messages_for_swe_stage(
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         user = (
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
-            "Use L001 as line number. One-line new value. Keep or improve prior edit. "
+            "Use line/new to replace one line, or after/insert to insert one line. Keep or improve prior edit. "
             'If unsure return {"edits":[]}.\n\n'
             f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
@@ -473,6 +474,29 @@ def _edit_plan_to_diff(repo_path: Path, text: str) -> str:
                     replacement[-1] = replacement[-1].rstrip("\n") + ending
                 span = max(1, len(new_lines))
                 current_lines[replacement_at : replacement_at + span] = replacement
+                updated_by_file[rel] = "".join(current_lines)
+                continue
+
+        insert_line = edit.get("insert")
+        after_line = edit.get("after")
+        before_line = edit.get("before")
+        if isinstance(after_line, str):
+            line_match = re.search(r"\d+", after_line)
+            after_line = int(line_match.group(0)) if line_match else after_line
+        if isinstance(before_line, str):
+            line_match = re.search(r"\d+", before_line)
+            before_line = int(line_match.group(0)) if line_match else before_line
+        if isinstance(insert_line, str) and (isinstance(after_line, int) or isinstance(before_line, int)):
+            current_lines = current.splitlines(keepends=True)
+            anchor = after_line if isinstance(after_line, int) else before_line
+            if 1 <= anchor <= len(current_lines):
+                anchor_index = anchor - 1
+                old_line = current_lines[anchor_index]
+                insert_text = _preserve_first_line_indent(old_line, insert_line)
+                if isinstance(after_line, int) and re.match(r"^\s*(def|class)\b.*:\s*$", old_line):
+                    insert_text = "    " + insert_text
+                insert_at = anchor if isinstance(after_line, int) else anchor_index
+                current_lines[insert_at:insert_at] = [insert_text.rstrip("\n") + "\n"]
                 updated_by_file[rel] = "".join(current_lines)
                 continue
 
@@ -619,6 +643,25 @@ def run_task_validation(repo_path: Path, task: SWEIssueTask, timeout_s: float = 
     """Run the issue-specific reproducer instead of the repo-wide test suite."""
     traceback_files = _issue_traceback_files(task.problem_statement, repo_path)
     if traceback_files:
+        if "SyntaxError" in task.problem_statement:
+            results = [
+                _run_python_validation(
+                    repo_path,
+                    ["python3", "-m", "py_compile", rel],
+                    timeout_s=timeout_s,
+                    kind="py_compile_traceback",
+                )
+                for rel in traceback_files
+            ]
+            return {
+                "passed": all(result["passed"] for result in results),
+                "result": "passed" if all(result["passed"] for result in results) else "failed",
+                "validation": "py_compile_traceback",
+                "commands": [result["command"] for result in results],
+                "latency_s": sum(result["latency_s"] for result in results),
+                "stdout": "\n".join(result["stdout"] for result in results)[-4000:],
+                "stderr": "\n".join(result["stderr"] for result in results)[-4000:],
+            }
         results = [
             _run_python_validation(
                 repo_path,

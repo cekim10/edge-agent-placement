@@ -30,10 +30,10 @@ from .client import ChatClient
 
 SWE_STAGES = ("issue_analysis", "patch_generation", "test_repair")
 
-MAX_ISSUE_CHARS = 900
+MAX_ISSUE_CHARS = 650
 MAX_TREE_CHARS = 1800
 MAX_CONTEXT_CHARS = 4000
-MAX_LOCALIZED_CONTEXT_CHARS = 2400
+MAX_LOCALIZED_CONTEXT_CHARS = 1500
 MAX_PRIOR_CHARS = 600
 MAX_PATCH_CHARS = 12000
 
@@ -173,7 +173,7 @@ def _issue_import_files(issue: str, repo_path: Path) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
-def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 1200) -> str:
+def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 850) -> str:
     lines = text.splitlines()
     selected: set[int] = set()
     for line_no in _issue_line_numbers(issue):
@@ -188,7 +188,7 @@ def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: in
         pattern = re.compile(rf"^\s*(def|class)\s+{re.escape(symbol)}\b")
         for index, line in enumerate(lines, start=1):
             if pattern.search(_sanitize_prompt_text(line)):
-                for near in range(max(1, index - 1), min(len(lines), index + 18) + 1):
+                for near in range(max(1, index - 1), min(len(lines), index + 10) + 1):
                     selected.add(near)
     if not selected:
         selected = set(range(1, min(len(lines), 8) + 1))
@@ -264,7 +264,7 @@ def _extract_likely_files(results: list[SWEStageResult], repo_path: Path, issue:
                 selected.append(match)
     if not selected:
         selected = [path for path in available if path.endswith(".py")][:4]
-    return selected[:4]
+    return selected[:2]
 
 
 def _localized_repo_context(repo_path: Path, results: list[SWEStageResult], issue: str) -> str:
@@ -316,21 +316,17 @@ def messages_for_swe_stage(
     elif stage == "patch_generation":
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         user = (
-            "Return a JSON object only with key edits. Prefer edits with keys file, line, new. "
-            "Use the L001 number as line. The new value is the full replacement line without the L001 prefix. "
-            "Alternatively use file, find, replace with real code text and no L001 prefixes. "
-            "Make the smallest edit possible; do not rewrite whole files or docstrings. "
-            "If unsure return an empty edits list.\n\n"
+            'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
+            "Use L001 as line number. One-line new value. Smallest edit. No whole-file rewrite. "
+            'If unsure return {"edits":[]}.\n\n'
             f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
     elif stage == "test_repair":
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         user = (
-            "Return a JSON object only with key edits. Prefer edits with keys file, line, new. "
-            "Use the L001 number as line. The new value is the full replacement line without the L001 prefix. "
-            "Alternatively use file, find, replace with real code text and no L001 prefixes. Keep or improve the prior edit. "
-            "Make the smallest edit possible; do not rewrite whole files or docstrings. "
-            "If unsure return an empty edits list.\n\n"
+            'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
+            "Use L001 as line number. One-line new value. Keep or improve prior edit. "
+            'If unsure return {"edits":[]}.\n\n'
             f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
     else:
@@ -647,6 +643,9 @@ def run_swe_workflow(
     final_patch = ""
     incident = task.to_incident()
     for stage, tier in zip(SWE_STAGES, placement):
+        if stage == "test_repair" and not include_prior:
+            results.append(SWEStageResult(stage=stage, tier=tier, latency_s=0.0, output=""))
+            continue
         messages = messages_for_swe_stage(
             task=task,
             repo_path=repo_path,

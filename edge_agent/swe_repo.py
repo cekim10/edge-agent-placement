@@ -13,6 +13,7 @@ repository's pytest suite passes.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -228,14 +229,16 @@ def messages_for_swe_stage(
         )
     elif stage == "patch_generation":
         user = (
-            "Stage B: produce a unified git diff that fixes the issue. "
-            "Return only the patch, starting with diff --git. No prose.\n\n"
+            "Stage B: propose a minimal repository edit. Return JSON only: "
+            "{\\\"edits\\\":[{\\\"file\\\":\\\"path.py\\\",\\\"find\\\":\\\"exact old text\\\",\\\"replace\\\":\\\"new text\\\"}]}. "
+            "The find text must appear exactly in the selected file. No prose.\n\n"
             f"ISSUE:\n{issue}\n\nREPOSITORY_CONTEXT:\n{context}\n\nPRIOR_STAGE_OUTPUTS:\n{prior}"
         )
     elif stage == "test_repair":
         user = (
-            "Stage C: review the proposed patch and return the final unified git diff. "
-            "Return only the patch, starting with diff --git. No prose.\n\n"
+            "Stage C: review the proposed edit and return the final minimal edit JSON only: "
+            "{\\\"edits\\\":[{\\\"file\\\":\\\"path.py\\\",\\\"find\\\":\\\"exact old text\\\",\\\"replace\\\":\\\"new text\\\"}]}. "
+            "No prose.\n\n"
             f"ISSUE:\n{issue}\n\nREPOSITORY_CONTEXT:\n{context}\n\nPRIOR_STAGE_OUTPUTS:\n{prior}"
         )
     else:
@@ -252,6 +255,74 @@ def extract_unified_diff(text: str) -> str:
             candidate = candidate[index:]
             break
     return _clip(candidate.rstrip() + "\n", MAX_PATCH_CHARS)
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    fenced = re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.S | re.I)
+    candidates = fenced + [text]
+    for candidate in candidates:
+        candidate = candidate.strip()
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start < 0 or end < start:
+            continue
+        try:
+            parsed = json.loads(candidate[start : end + 1])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _edit_plan_to_diff(repo_path: Path, text: str) -> str:
+    parsed = _extract_json_object(text)
+    edits = parsed.get("edits", [])
+    if isinstance(edits, dict):
+        edits = [edits]
+    if not isinstance(edits, list):
+        return ""
+
+    original_by_file: dict[str, str] = {}
+    updated_by_file: dict[str, str] = {}
+    for edit in edits:
+        if not isinstance(edit, dict):
+            continue
+        rel = str(edit.get("file", "")).strip().lstrip("./")
+        find = edit.get("find", "")
+        replace = edit.get("replace", "")
+        if not rel or not isinstance(find, str) or not isinstance(replace, str):
+            continue
+        path = repo_path / rel
+        if not path.exists() or not path.is_file():
+            continue
+        original = original_by_file.setdefault(rel, path.read_text(encoding="utf-8"))
+        current = updated_by_file.get(rel, original)
+        if find not in current:
+            continue
+        updated_by_file[rel] = current.replace(find, replace, 1)
+
+    chunks: list[str] = []
+    for rel, updated in updated_by_file.items():
+        original = original_by_file[rel]
+        if original == updated:
+            continue
+        diff = difflib.unified_diff(
+            original.splitlines(keepends=True),
+            updated.splitlines(keepends=True),
+            fromfile=f"a/{rel}",
+            tofile=f"b/{rel}",
+        )
+        body = "".join(diff)
+        if body:
+            chunks.append(f"diff --git a/{rel} b/{rel}\n" + body)
+    return _clip("\n".join(chunks), MAX_PATCH_CHARS)
+
+
+def extract_patch_or_edit_diff(text: str, repo_path: Path) -> str:
+    if "diff --git " in text or re.search(r"(?m)^---\s+", text):
+        return extract_unified_diff(text)
+    return _edit_plan_to_diff(repo_path, text)
 
 
 def copy_repo_to_temp(repo_path: Path) -> Path:
@@ -338,7 +409,7 @@ def run_swe_workflow(
         )
         results.append(SWEStageResult(stage=stage, tier=tier, latency_s=latency_s, output=output))
         if stage in {"patch_generation", "test_repair"}:
-            final_patch = extract_unified_diff(output)
+            final_patch = extract_patch_or_edit_diff(output, repo_path)
     return results, final_patch
 
 

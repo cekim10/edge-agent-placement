@@ -25,7 +25,7 @@ MAX_APP_DESCRIPTIONS_CHARS = 520
 MAX_STAGE_OUTPUT_CHARS = 520
 MAX_EXECUTION_OUTPUT_CHARS = 1000
 MAX_EVALUATION_CHARS = 1000
-MAX_API_DOCS_CHARS = 260
+MAX_API_DOCS_CHARS = 180
 
 
 @dataclass(frozen=True)
@@ -116,6 +116,9 @@ def _json_loads_loose(text: str) -> Any:
 def _extract_code(text: str) -> str:
     fenced = re.findall(r"```(?:python|py)?\s*(.*?)```", text, flags=re.S | re.I)
     candidate = fenced[-1].strip() if fenced else text.strip()
+    if candidate.startswith("```"):
+        candidate = candidate.split("\n", 1)[1] if "\n" in candidate else ""
+        candidate = candidate.rsplit("```", 1)[0]
     if candidate.lower().startswith("python\n"):
         candidate = candidate.split("\n", 1)[1]
     return candidate.strip()
@@ -177,7 +180,7 @@ def _api_docs_preview(task: Any, selected_apps: list[str]) -> str:
             doc = getattr(api_docs, app_name)
         except Exception:
             continue
-        chunks.append(f"{app_name} APIs:\n{_clip(doc, 130)}")
+        chunks.append(f"{app_name} APIs:\n{_clip(doc, 90)}")
     return _clip("\n\n".join(chunks), MAX_API_DOCS_CHARS)
 
 
@@ -259,6 +262,12 @@ def messages_for_appworld_stage(
     supervisor = _clip(task_info.supervisor, 320)
 
     system = "You are a deterministic AppWorld agent."
+    appworld_rules = (
+        "Rules: use preloaded apis only; no imports or external clients. "
+        "Use apis.api_docs.show_api_doc(app, api) if unsure. "
+        "For private apps, get credentials with apis.supervisor.show_account_passwords(), then login. "
+        "For answer tasks call apis.supervisor.complete_task(answer=...)."
+    )
     if stage == "task_analysis":
         user = (
             "Return JSON only: task_summary, relevant_apps, plan.\n\n"
@@ -271,13 +280,12 @@ def messages_for_appworld_stage(
         )
     elif stage == "code_generation":
         user = (
-            "Return Python code only. Use apis.<app>.<api>(...). "
-            "Call apis.supervisor.complete_task(...) when done.\n\n"
-            f"TASK:\n{_clip(instruction, 360)}\n\nAPPS:\n{selected_apps_text}\n\nAPI_DOCS:\n{api_docs}\n\nPLAN:\n{_clip(prior, 100)}"
+            f"{appworld_rules} Return Python code only.\n\n"
+            f"TASK:\n{_clip(instruction, 320)}\n\nAPPS:\n{selected_apps_text}\n\nAPI_DOCS:\n{api_docs}\n\nPLAN:\n{_clip(prior, 80)}"
         )
     elif stage == "execution_verification":
         user = (
-            "Return empty code if done; otherwise return one Python repair code block only.\n\n"
+            f"{appworld_rules} Return empty code if done; otherwise one Python repair code block only.\n\n"
             f"TASK:\n{_clip(instruction, 420)}\n\nLAST_EXECUTION:\n{_clip(exec_text, 420)}\n\nEVALUATION:\n{_clip(eval_text, 360)}\n\nPLAN:\n{_clip(prior, 160)}"
         )
     else:

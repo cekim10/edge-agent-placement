@@ -203,6 +203,7 @@ def _messages_for_stage(
     data_source_catalog: list[str] | None = None,
     mitre_catalog: list[str] | None = None,
     use_mitre_prior: bool = False,
+    use_data_source_prior: bool = False,
 ) -> list[dict[str, str]]:
     objective = _clip(record.detection_objective, MAX_OBJECTIVE_CHARS)
     platform = record.platform
@@ -255,12 +256,22 @@ def _messages_for_stage(
         )
         return [{"role": "user", "content": user}]
 
+    if stage == "data_source_discovery":
+        data_prior = f"\nPRIOR_STAGE_OUTPUTS:\n{prior}" if use_data_source_prior else ""
+        user = (
+            "Select the exact telemetry source names from AVAILABLE_DATA_SOURCES.\n"
+            "Return minified JSON only, for example {\\\"data_sources\\\":[\\\"ExactSourceName\\\"]}.\n\n"
+            f"PLATFORM: {platform}\n"
+            f"DETECTION_OBJECTIVE:\n{objective}\n"
+            f"{catalog_block}"
+            f"{data_prior}"
+        )
+        return [{"role": "user", "content": user}]
+
     user = (
         f"{prompts[stage]}\n\n"
         f"PLATFORM: {platform}\n"
         f"DETECTION_OBJECTIVE:\n{objective}\n"
-        f"{mitre_block}"
-        f"{catalog_block}\n"
         f"PRIOR_STAGE_OUTPUTS:\n{prior}"
     )
     return [{"role": "system", "content": _system_prompt()}, {"role": "user", "content": user}]
@@ -332,6 +343,7 @@ def run_cti_workflow(
     data_source_catalog: list[str] | None = None,
     mitre_catalog: list[str] | None = None,
     use_mitre_prior: bool = False,
+    use_data_source_prior: bool = False,
 ) -> list[CTIStageResult]:
     if len(placement) != len(CTI_STAGES):
         raise ValueError(f"placement must have {len(CTI_STAGES)} tiers")
@@ -358,6 +370,7 @@ def run_cti_workflow(
                 data_source_catalog=data_source_catalog,
                 mitre_catalog=mitre_catalog,
                 use_mitre_prior=use_mitre_prior,
+                use_data_source_prior=use_data_source_prior,
             )
             prompt_chars = sum(len(message["content"]) for message in messages)
             print(

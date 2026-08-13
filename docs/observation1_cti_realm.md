@@ -109,7 +109,9 @@ model-generated, while C3/C4 are compact deterministic pass-through outputs.
 Short JSON stages should use stage-specific token caps such as
 `--mitre-max-tokens 16`. C1 also defaults to a direct objective-only classifier
 prompt instead of consuming C0 output because some vLLM/Qwen runs stall on the
-longer chained prompt; pass `--mitre-use-prior` only when debugging that path.
+longer chained prompt. C2 similarly defaults to an objective-only data-source
+classifier prompt; pass `--mitre-use-prior` or `--data-source-use-prior` only
+when debugging those paths.
 This avoids Qwen/vLLM stalls in long KQL/rule-generation completions while
 preserving the MITRE/data-source scoring signal needed for the first
 stage-sensitivity figure. The proxy finalizer does not read ground truth; it

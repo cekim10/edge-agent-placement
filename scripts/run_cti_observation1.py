@@ -80,6 +80,11 @@ def main() -> int:
         help="Include prior C0 output in C1 MITRE mapping; disabled by default to avoid vLLM stalls",
     )
     parser.add_argument(
+        "--data-source-use-prior",
+        action="store_true",
+        help="Include prior C0/C1 output in C2 data-source discovery; disabled by default to avoid vLLM stalls",
+    )
+    parser.add_argument(
         "--proxy-final-from-c2",
         action="store_true",
         help="Run C0-C2 with LLMs and synthesize C3-C4 to avoid KQL/rule-generation stalls",
@@ -146,6 +151,7 @@ def main() -> int:
                     data_source_catalog=data_source_catalog,
                     mitre_catalog=mitre_catalog,
                     use_mitre_prior=args.mitre_use_prior,
+                    use_data_source_prior=args.data_source_use_prior,
                 )
                 score = score_cti_proxy(record, stage_results)
                 row = {

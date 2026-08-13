@@ -22,7 +22,7 @@ APPWORLD_STAGES = ("task_analysis", "api_planning", "code_generation", "executio
 
 MAX_INSTRUCTION_CHARS = 650
 MAX_APP_DESCRIPTIONS_CHARS = 520
-MAX_STAGE_OUTPUT_CHARS = 900
+MAX_STAGE_OUTPUT_CHARS = 520
 MAX_EXECUTION_OUTPUT_CHARS = 1000
 MAX_EVALUATION_CHARS = 1000
 MAX_API_DOCS_CHARS = 1400
@@ -143,6 +143,22 @@ def _selected_apps_from_results(results: list[AppWorldStageResult]) -> list[str]
     return list(dict.fromkeys(apps))[:4]
 
 
+def _compact_prior(results: list[AppWorldStageResult]) -> str:
+    compact: list[dict[str, Any]] = []
+    for result in results:
+        parsed = _json_loads_loose(result.output)
+        if isinstance(parsed, dict):
+            item = {
+                key: parsed[key]
+                for key in ("relevant_apps", "selected_apps", "api_needs", "execution_plan", "plan")
+                if key in parsed
+            }
+            compact.append({"stage": result.stage, **item})
+        else:
+            compact.append({"stage": result.stage, "output": _clip(result.output, 160)})
+    return _clip(compact, MAX_STAGE_OUTPUT_CHARS)
+
+
 def _api_docs_preview(task: Any, selected_apps: list[str]) -> str:
     api_docs = getattr(task, "api_docs", None)
     if api_docs is None:
@@ -234,7 +250,9 @@ def messages_for_appworld_stage(
 ) -> list[dict[str, str]]:
     instruction = _clip(task_info.instruction, MAX_INSTRUCTION_CHARS)
     apps = _summarize_app_descriptions(task_info.app_descriptions)
-    prior = _clip("\n\n".join(f"{item.stage}: {item.output}" for item in results), MAX_STAGE_OUTPUT_CHARS)
+    selected_apps = _selected_apps_from_results(results)
+    selected_apps_text = ", ".join(selected_apps)
+    prior = _compact_prior(results)
     exec_text = _clip(execution_outputs[-1]["output"], MAX_EXECUTION_OUTPUT_CHARS) if execution_outputs else ""
     eval_text = _clip(evaluation or {}, MAX_EVALUATION_CHARS) if evaluation else ""
     api_docs = _clip(task_info.api_docs_preview, MAX_API_DOCS_CHARS)
@@ -249,7 +267,7 @@ def messages_for_appworld_stage(
     elif stage == "api_planning":
         user = (
             "Return JSON only: selected_apps, api_needs, execution_plan. No code.\n\n"
-            f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}\n\nPRIOR:\n{prior}"
+            f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}\n\nRELEVANT_APPS:\n{selected_apps_text}"
         )
     elif stage == "code_generation":
         user = (

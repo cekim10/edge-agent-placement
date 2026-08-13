@@ -33,8 +33,8 @@ SWE_STAGES = ("issue_analysis", "patch_generation", "test_repair")
 MAX_ISSUE_CHARS = 1800
 MAX_TREE_CHARS = 3000
 MAX_CONTEXT_CHARS = 5000
-MAX_LOCALIZED_CONTEXT_CHARS = 5000
-MAX_PRIOR_CHARS = 3500
+MAX_LOCALIZED_CONTEXT_CHARS = 3600
+MAX_PRIOR_CHARS = 1200
 MAX_PATCH_CHARS = 12000
 
 
@@ -229,17 +229,15 @@ def messages_for_swe_stage(
         )
     elif stage == "patch_generation":
         user = (
-            "Stage B: propose a minimal repository edit. Return JSON only: "
-            "{\\\"edits\\\":[{\\\"file\\\":\\\"path.py\\\",\\\"find\\\":\\\"exact old text\\\",\\\"replace\\\":\\\"new text\\\"}]}. "
-            "The find text must appear exactly in the selected file. No prose.\n\n"
-            f"ISSUE:\n{issue}\n\nREPOSITORY_CONTEXT:\n{context}\n\nPRIOR_STAGE_OUTPUTS:\n{prior}"
+            "Return one-line JSON only: {\\\"edits\\\":[{\\\"file\\\":\\\"path.py\\\",\\\"find\\\":\\\"old\\\",\\\"replace\\\":\\\"new\\\"}]}. "
+            "Use exact copied find text from FILE. If unsure return {\\\"edits\\\":[]}.\n\n"
+            f"ISSUE:\n{issue}\n\n{context}\n\nPRIOR:\n{prior}"
         )
     elif stage == "test_repair":
         user = (
-            "Stage C: review the proposed edit and return the final minimal edit JSON only: "
-            "{\\\"edits\\\":[{\\\"file\\\":\\\"path.py\\\",\\\"find\\\":\\\"exact old text\\\",\\\"replace\\\":\\\"new text\\\"}]}. "
-            "No prose.\n\n"
-            f"ISSUE:\n{issue}\n\nREPOSITORY_CONTEXT:\n{context}\n\nPRIOR_STAGE_OUTPUTS:\n{prior}"
+            "Return final one-line edit JSON only. Keep or improve the prior edit. "
+            "If unsure return {\\\"edits\\\":[]}.\n\n"
+            f"ISSUE:\n{issue}\n\n{context}\n\nPRIOR:\n{prior}"
         )
     else:
         raise ValueError(f"unknown SWE stage: {stage}")

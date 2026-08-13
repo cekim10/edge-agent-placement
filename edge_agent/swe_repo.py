@@ -151,6 +151,19 @@ def _issue_traceback_files(issue: str, repo_path: Path) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
+def _issue_import_files(issue: str, repo_path: Path) -> list[str]:
+    modules = []
+    modules.extend(re.findall(r"\bfrom\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import\b", issue))
+    modules.extend(re.findall(r"\bimport\s+([A-Za-z_][A-Za-z0-9_.]*)\b", issue))
+    candidates = []
+    for module in modules:
+        module_path = module.replace(".", "/")
+        for rel in (f"src/{module_path}.py", f"{module_path}.py", f"src/{module_path}/__init__.py"):
+            if (repo_path / rel).exists():
+                candidates.append(rel)
+    return list(dict.fromkeys(candidates))
+
+
 def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 900) -> str:
     lines = text.splitlines()
     selected: set[int] = set()
@@ -208,6 +221,9 @@ def _extract_likely_files(results: list[SWEStageResult], repo_path: Path, issue:
     available = _all_repo_files(repo_path)
     available_set = set(available)
     candidates: list[str] = []
+    candidates.extend(_issue_traceback_files(issue, repo_path))
+    candidates.extend(_issue_import_files(issue, repo_path))
+    candidates.extend(path for path in available if path in issue)
     if results:
         text = results[-1].output
         try:
@@ -221,8 +237,6 @@ def _extract_likely_files(results: list[SWEStageResult], repo_path: Path, issue:
         except json.JSONDecodeError:
             pass
         candidates.extend(re.findall(r"[A-Za-z0-9_./-]+\.py", text))
-    candidates.extend(_issue_traceback_files(issue, repo_path))
-    candidates.extend(path for path in available if path in issue)
 
     selected = []
     seen = set()

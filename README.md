@@ -109,3 +109,13 @@ The cyber-defense stage-sensitivity prototype is documented in
 ```bash
 python3 scripts/run_cti_observation1.py --aces-root ~/ACESEvals --dataset-size 25 --limit 5
 ```
+
+
+## SWE-agent test-repo Observation 1
+
+The Option-B GitHub-repo workload is documented in
+`docs/observation1_swe_testrepo.md`.
+
+```bash
+python3 scripts/run_swe_testrepo_observation1.py --repo-path ~/test-repo --only-placement all_cloud
+```

@@ -147,6 +147,22 @@ def _issue_symbols(issue: str) -> list[str]:
     return list(dict.fromkeys(symbol for symbol in symbols if symbol and symbol not in ignore))
 
 
+def _docstring_line_numbers(lines: list[str]) -> set[int]:
+    docstring_lines: set[int] = set()
+    in_docstring = False
+    for index, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        quote_count = stripped.count('"""') + stripped.count("'''")
+        if quote_count:
+            docstring_lines.add(index)
+            if quote_count % 2 == 1:
+                in_docstring = not in_docstring
+            continue
+        if in_docstring:
+            docstring_lines.add(index)
+    return docstring_lines
+
+
 def _issue_traceback_files(issue: str, repo_path: Path) -> list[str]:
     candidates = []
     for match in re.findall(r'File\s+"([^"]+\.py)"', issue):
@@ -176,6 +192,7 @@ def _issue_import_files(issue: str, repo_path: Path) -> list[str]:
 def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 850) -> str:
     lines = text.splitlines()
     selected: set[int] = set()
+    explicit_issue_lines = set(_issue_line_numbers(issue))
     for line_no in _issue_line_numbers(issue):
         for index in range(max(1, line_no - radius), min(len(lines), line_no + radius) + 1):
             selected.add(index)
@@ -188,10 +205,12 @@ def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: in
         pattern = re.compile(rf"^\s*(def|class)\s+{re.escape(symbol)}\b")
         for index, line in enumerate(lines, start=1):
             if pattern.search(_sanitize_prompt_text(line)):
-                for near in range(max(1, index - 1), min(len(lines), index + 10) + 1):
+                for near in range(max(1, index - 1), min(len(lines), index + 14) + 1):
                     selected.add(near)
     if not selected:
         selected = set(range(1, min(len(lines), 8) + 1))
+    docstring_lines = _docstring_line_numbers(lines)
+    selected = {index for index in selected if index in explicit_issue_lines or index not in docstring_lines}
     numbered = "\n".join(f"L{index:03d}: {_sanitize_prompt_text(lines[index - 1])}" for index in sorted(selected))
     return _clip(numbered, max_chars)
 
@@ -391,21 +410,27 @@ def _line_signature(text: str) -> str:
 
 
 def _replacement_index(lines: list[str], requested_index: int, new_first_line: str) -> int | None:
+    replacement = _line_signature(new_first_line)
     if 0 <= requested_index < len(lines):
         requested = _line_signature(lines[requested_index])
-        replacement = _line_signature(new_first_line)
-        if requested == replacement or requested in replacement or replacement in requested:
+        if requested == replacement:
             return requested_index
-    replacement = _line_signature(new_first_line)
+        if len(replacement) >= 8 and (requested in replacement or replacement in requested):
+            return requested_index
     for index, line in enumerate(lines):
         if _line_signature(line) == replacement:
             return index
-    return requested_index if 0 <= requested_index < len(lines) else None
+    return None
 
 
 def _preserve_first_line_indent(old_line: str, new_line: str) -> str:
     old_indent = re.match(r"\s*", old_line).group(0)
-    return old_indent + new_line.strip()
+    replacement = new_line.strip()
+    old_stripped = old_line.strip()
+    if re.match(r"^(def|class)\b", old_stripped) and not old_stripped.endswith(":"):
+        if _line_signature(old_stripped) == _line_signature(replacement) and not replacement.endswith(":"):
+            replacement += ":"
+    return old_indent + replacement
 
 
 def _edit_plan_to_diff(repo_path: Path, text: str) -> str:

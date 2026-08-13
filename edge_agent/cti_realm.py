@@ -214,10 +214,30 @@ def _messages_for_stage(record: CTIRecord, stage: str, stage_outputs: list[CTISt
     return [{"role": "system", "content": _system_prompt()}, {"role": "user", "content": user}]
 
 
+def _extract_prior_data_sources(text: str) -> list[str]:
+    candidates = re.findall(
+        r"\b[A-Z][A-Za-z0-9_]*(?:Events|Logs|Telemetry|Evidence|Records|Data|Table|Tables)\b",
+        text,
+    )
+    candidates.extend(re.findall(r"[\"']([A-Za-z][A-Za-z0-9_]*(?:Events|Logs))[\"']", text))
+    ignored = {"Events", "Logs", "Telemetry", "Data", "Table", "Tables"}
+    deduped = []
+    seen = set()
+    for candidate in candidates:
+        if candidate in ignored or candidate.lower() in seen:
+            continue
+        seen.add(candidate.lower())
+        deduped.append(candidate)
+    return deduped
+
+
 def _proxy_stage_output(record: CTIRecord, stage: str, stage_outputs: list[CTIStageResult]) -> str:
+    del record
     prior = "\n".join(result.output for result in stage_outputs)
+    mitre_techniques = sorted(_mitre_ids(prior))
+    data_sources = _extract_prior_data_sources(prior)
+    source = data_sources[0] if data_sources else "SecurityEvent"
     if stage == "kql_development":
-        source = record.expected_data_sources[0] if record.expected_data_sources else "SecurityEvent"
         return json.dumps(
             {
                 "kql_query": f"{source} | take 20",
@@ -228,12 +248,9 @@ def _proxy_stage_output(record: CTIRecord, stage: str, stage_outputs: list[CTISt
     if stage == "rule_generation":
         return json.dumps(
             {
-                "mitre_techniques": record.expected_mitre_techniques,
-                "data_sources": record.expected_data_sources,
-                "kql_query": (
-                    (record.expected_data_sources[0] if record.expected_data_sources else "SecurityEvent")
-                    + " | take 20"
-                ),
+                "mitre_techniques": mitre_techniques,
+                "data_sources": data_sources,
+                "kql_query": f"{source} | take 20",
                 "derived_from_prior": _clip(prior, 300),
             },
             separators=(",", ":"),

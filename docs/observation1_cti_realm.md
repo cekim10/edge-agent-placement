@@ -107,7 +107,9 @@ The recommended Phase-A quality run uses `--proxy-final-from-c2`: C0-C2 are
 model-generated, while C3/C4 are compact deterministic pass-through outputs.
 This avoids Qwen/vLLM stalls in long KQL/rule-generation completions while
 preserving the MITRE/data-source scoring signal needed for the first
-stage-sensitivity figure. Do not use this as the final CTI-REALM C4 result.
+stage-sensitivity figure. The proxy finalizer does not read ground truth; it
+only parses MITRE IDs and data-source names from prior model outputs. Do not
+use this as the final CTI-REALM C4 result.
 
 Local smoke test without vLLM:
 

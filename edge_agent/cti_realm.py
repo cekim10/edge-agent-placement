@@ -202,6 +202,7 @@ def _messages_for_stage(
     stage_outputs: list[CTIStageResult],
     data_source_catalog: list[str] | None = None,
     mitre_catalog: list[str] | None = None,
+    use_mitre_prior: bool = False,
 ) -> list[dict[str, str]]:
     objective = _clip(record.detection_objective, MAX_OBJECTIVE_CHARS)
     platform = record.platform
@@ -241,6 +242,18 @@ def _messages_for_stage(
             "Keep it under 80 tokens. No markdown. No prose."
         ),
     }
+
+    if stage == "mitre_mapping":
+        mitre_prior = f"\nPRIOR_STAGE_OUTPUTS:\n{prior}" if use_mitre_prior else ""
+        user = (
+            "Select exactly one MITRE ATT&CK technique ID from AVAILABLE_MITRE_TECHNIQUES.\n"
+            "Return minified JSON only, for example {\\\"mitre_techniques\\\":[\\\"T1552\\\"]}.\n\n"
+            f"PLATFORM: {platform}\n"
+            f"DETECTION_OBJECTIVE:\n{objective}\n"
+            f"{mitre_block}"
+            f"{mitre_prior}"
+        )
+        return [{"role": "user", "content": user}]
 
     user = (
         f"{prompts[stage]}\n\n"
@@ -318,6 +331,7 @@ def run_cti_workflow(
     proxy_final_from_c2: bool = False,
     data_source_catalog: list[str] | None = None,
     mitre_catalog: list[str] | None = None,
+    use_mitre_prior: bool = False,
 ) -> list[CTIStageResult]:
     if len(placement) != len(CTI_STAGES):
         raise ValueError(f"placement must have {len(CTI_STAGES)} tiers")
@@ -343,6 +357,7 @@ def run_cti_workflow(
                 results,
                 data_source_catalog=data_source_catalog,
                 mitre_catalog=mitre_catalog,
+                use_mitre_prior=use_mitre_prior,
             )
             prompt_chars = sum(len(message["content"]) for message in messages)
             print(

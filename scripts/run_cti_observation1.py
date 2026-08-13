@@ -75,6 +75,11 @@ def main() -> int:
     parser.add_argument("--rule-max-tokens", type=int, default=16)
     parser.add_argument("--mock", action="store_true")
     parser.add_argument(
+        "--mitre-use-prior",
+        action="store_true",
+        help="Include prior C0 output in C1 MITRE mapping; disabled by default to avoid vLLM stalls",
+    )
+    parser.add_argument(
         "--proxy-final-from-c2",
         action="store_true",
         help="Run C0-C2 with LLMs and synthesize C3-C4 to avoid KQL/rule-generation stalls",
@@ -140,6 +145,7 @@ def main() -> int:
                     proxy_final_from_c2=args.proxy_final_from_c2,
                     data_source_catalog=data_source_catalog,
                     mitre_catalog=mitre_catalog,
+                    use_mitre_prior=args.mitre_use_prior,
                 )
                 score = score_cti_proxy(record, stage_results)
                 row = {

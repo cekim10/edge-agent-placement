@@ -7,8 +7,8 @@ Fixed stage workflow:
 
     issue_analysis -> patch_generation -> test_repair
 
-The final quality metric is whether the produced patch applies and the copied
-repository's pytest suite passes.
+The final quality metric is whether the produced patch applies and the task
+specific reproducer passes.
 """
 
 from __future__ import annotations
@@ -426,6 +426,104 @@ def run_pytest(repo_path: Path, timeout_s: float = 20.0) -> dict[str, Any]:
     }
 
 
+def _run_python_validation(
+    repo_path: Path,
+    args: list[str],
+    *,
+    timeout_s: float,
+    kind: str,
+) -> dict[str, Any]:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo_path / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    started = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=repo_path,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout_s,
+            check=False,
+        )
+        elapsed = time.perf_counter() - started
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "passed": False,
+            "result": "timed_out",
+            "validation": kind,
+            "command": args,
+            "latency_s": timeout_s,
+            "stdout": exc.stdout or "",
+            "stderr": exc.stderr or "",
+        }
+    return {
+        "passed": completed.returncode == 0,
+        "result": "passed" if completed.returncode == 0 else "failed",
+        "validation": kind,
+        "command": args,
+        "latency_s": elapsed,
+        "stdout": completed.stdout[-4000:],
+        "stderr": completed.stderr[-4000:],
+    }
+
+
+def _issue_traceback_files(issue: str, repo_path: Path) -> list[str]:
+    candidates = []
+    for match in re.findall(r'File\s+"([^"]+\.py)"', issue):
+        normalized = match.replace("\\", "/").replace("/./", "/")
+        for anchor in ("/tests/", "/src/"):
+            if anchor in normalized:
+                rel = normalized.split(anchor, 1)[1]
+                rel = anchor.strip("/") + "/" + rel
+                if (repo_path / rel).exists():
+                    candidates.append(rel)
+    return list(dict.fromkeys(candidates))
+
+
+def _issue_python_blocks(issue: str) -> list[str]:
+    blocks = re.findall(r"```python\s*(.*?)```", issue, flags=re.S | re.I)
+    return [block.strip() for block in blocks if block.strip()]
+
+
+def run_task_validation(repo_path: Path, task: SWEIssueTask, timeout_s: float = 20.0) -> dict[str, Any]:
+    """Run the issue-specific reproducer instead of the repo-wide test suite."""
+    traceback_files = _issue_traceback_files(task.problem_statement, repo_path)
+    if traceback_files:
+        results = [
+            _run_python_validation(
+                repo_path,
+                ["python3", rel],
+                timeout_s=timeout_s,
+                kind="traceback_file",
+            )
+            for rel in traceback_files
+        ]
+        return {
+            "passed": all(result["passed"] for result in results),
+            "result": "passed" if all(result["passed"] for result in results) else "failed",
+            "validation": "traceback_file",
+            "commands": [result["command"] for result in results],
+            "latency_s": sum(result["latency_s"] for result in results),
+            "stdout": "\n".join(result["stdout"] for result in results)[-4000:],
+            "stderr": "\n".join(result["stderr"] for result in results)[-4000:],
+        }
+
+    code_blocks = _issue_python_blocks(task.problem_statement)
+    if code_blocks:
+        code = "\n\n".join(code_blocks)
+        return _run_python_validation(
+            repo_path,
+            ["python3", "-c", code],
+            timeout_s=timeout_s,
+            kind="python_block",
+        )
+
+    result = run_pytest(repo_path, timeout_s=timeout_s)
+    result["validation"] = "pytest"
+    return result
+
+
 def run_swe_workflow(
     *,
     client: ChatClient,
@@ -467,7 +565,9 @@ def run_swe_workflow(
         )
         results.append(SWEStageResult(stage=stage, tier=tier, latency_s=latency_s, output=output))
         if stage in {"patch_generation", "test_repair"}:
-            final_patch = extract_patch_or_edit_diff(output, repo_path)
+            candidate_patch = extract_patch_or_edit_diff(output, repo_path)
+            if stage == "patch_generation" or (include_prior and candidate_patch.strip()):
+                final_patch = candidate_patch
     return results, final_patch
 
 

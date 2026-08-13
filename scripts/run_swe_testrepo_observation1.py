@@ -25,8 +25,8 @@ from edge_agent.swe_repo import (  # noqa: E402
     load_swe_testrepo_tasks,
     placement_for_edge_swe_stage,
     placement_name,
-    run_pytest,
     run_swe_workflow,
+    run_task_validation,
 )
 
 
@@ -115,7 +115,7 @@ def main() -> int:
                         include_prior=not args.no_prior,
                     )
                     patch_result = apply_patch(worktree, final_patch)
-                    test_result = run_pytest(worktree, timeout_s=args.test_timeout_s) if patch_result["applied"] else {
+                    test_result = run_task_validation(worktree, task, timeout_s=args.test_timeout_s) if patch_result["applied"] else {
                         "passed": False,
                         "result": "patch_failed",
                         "latency_s": 0.0,

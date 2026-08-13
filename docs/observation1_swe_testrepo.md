@@ -28,8 +28,13 @@ Patch generation and test repair receive selected file names plus localized Pyth
 Final quality:
 
 ```text
-copy repo -> convert generated edit JSON to unified diff -> git apply -> run python3 -m pytest -q
+copy repo -> convert generated edit JSON to unified diff -> git apply -> run task-specific reproducer
 ```
+
+The validator uses the traceback file from the problem statement when present,
+then fenced Python repro code, and falls back to `python3 -m pytest -q` only
+when the issue does not contain a specific reproducer. This avoids penalizing
+one issue for unrelated known bugs in the test repository.
 
 ## Setup
 

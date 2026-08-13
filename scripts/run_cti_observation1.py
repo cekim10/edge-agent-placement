@@ -19,6 +19,7 @@ from edge_agent.cti_realm import (  # noqa: E402
     CTI_STAGES,
     CTIMockClient,
     build_data_source_catalog,
+    build_mitre_catalog,
     load_cti_realm_records,
     placement_for_edge_stage,
     placement_name,
@@ -93,8 +94,14 @@ def main() -> int:
     data_dir = _resolve_data_dir(args)
     all_records = load_cti_realm_records(data_dir, args.dataset_size, limit=0)
     data_source_catalog = build_data_source_catalog(all_records)
+    mitre_catalog = build_mitre_catalog(all_records)
     records = all_records[: args.limit] if args.limit else all_records
-    print(f"Loaded {len(records)} records; data_source_catalog_size={len(data_source_catalog)}", flush=True)
+    print(
+        f"Loaded {len(records)} records; "
+        f"data_source_catalog_size={len(data_source_catalog)} "
+        f"mitre_catalog_size={len(mitre_catalog)}",
+        flush=True,
+    )
     stage_max_tokens = {
         "kql_development": args.kql_max_tokens,
         "rule_generation": args.rule_max_tokens,
@@ -126,6 +133,7 @@ def main() -> int:
                     placement=placement,
                     proxy_final_from_c2=args.proxy_final_from_c2,
                     data_source_catalog=data_source_catalog,
+                    mitre_catalog=mitre_catalog,
                 )
                 score = score_cti_proxy(record, stage_results)
                 row = {

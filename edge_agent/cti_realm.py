@@ -144,6 +144,19 @@ def build_data_source_catalog(records: list[CTIRecord]) -> list[str]:
     return sorted(catalog, key=str.lower)
 
 
+def build_mitre_catalog(records: list[CTIRecord]) -> list[str]:
+    seen = set()
+    catalog = []
+    for record in records:
+        for technique in record.expected_mitre_techniques:
+            key = technique.upper()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            catalog.append(key)
+    return sorted(catalog)
+
+
 def placement_for_edge_stage(edge_stage: str | None) -> tuple[str, ...]:
     if edge_stage is None or edge_stage == "all_cloud":
         return tuple("cloud" for _ in CTI_STAGES)
@@ -188,12 +201,15 @@ def _messages_for_stage(
     stage: str,
     stage_outputs: list[CTIStageResult],
     data_source_catalog: list[str] | None = None,
+    mitre_catalog: list[str] | None = None,
 ) -> list[dict[str, str]]:
     objective = _clip(record.detection_objective, MAX_OBJECTIVE_CHARS)
     platform = record.platform
     prior = _prior_block(stage_outputs)
     catalog = ", ".join(data_source_catalog or [])
     catalog_block = f"\nAVAILABLE_DATA_SOURCES:\n{catalog}\n" if catalog else ""
+    mitre_candidates = ", ".join(mitre_catalog or [])
+    mitre_block = f"\nAVAILABLE_MITRE_TECHNIQUES:\n{mitre_candidates}\n" if mitre_candidates else ""
 
     prompts = {
         "cti_analysis": (
@@ -204,8 +220,9 @@ def _messages_for_stage(
         ),
         "mitre_mapping": (
             "Stage C1: MITRE technique mapping.\n"
-            "Map the behavior to likely MITRE ATT&CK technique IDs. IDs must use forms like T1059 or T1059.001.\n"
-            "Return compact JSON: {\\\"mitre_techniques\\\":[\\\"Txxxx\\\"]}. Do not output names without IDs."
+            "Choose the most specific ATT&CK technique IDs only from AVAILABLE_MITRE_TECHNIQUES. "
+            "If multiple candidates seem plausible, prefer the candidate that best matches the detection objective wording.\n"
+            "Return compact JSON: {\\\"mitre_techniques\\\":[\\\"Txxxx\\\"]}. Do not output IDs outside the candidate list."
         ),
         "data_source_discovery": (
             "Stage C2: data-source discovery.\n"
@@ -229,6 +246,7 @@ def _messages_for_stage(
         f"{prompts[stage]}\n\n"
         f"PLATFORM: {platform}\n"
         f"DETECTION_OBJECTIVE:\n{objective}\n"
+        f"{mitre_block}"
         f"{catalog_block}\n"
         f"PRIOR_STAGE_OUTPUTS:\n{prior}"
     )
@@ -299,6 +317,7 @@ def run_cti_workflow(
     placement: tuple[str, ...],
     proxy_final_from_c2: bool = False,
     data_source_catalog: list[str] | None = None,
+    mitre_catalog: list[str] | None = None,
 ) -> list[CTIStageResult]:
     if len(placement) != len(CTI_STAGES):
         raise ValueError(f"placement must have {len(CTI_STAGES)} tiers")
@@ -318,7 +337,13 @@ def run_cti_workflow(
                 flush=True,
             )
         else:
-            messages = _messages_for_stage(record, stage, results, data_source_catalog)
+            messages = _messages_for_stage(
+                record,
+                stage,
+                results,
+                data_source_catalog=data_source_catalog,
+                mitre_catalog=mitre_catalog,
+            )
             prompt_chars = sum(len(message["content"]) for message in messages)
             print(
                 f"  stage_start stage={stage} tier={tier} prompt_chars={prompt_chars}",

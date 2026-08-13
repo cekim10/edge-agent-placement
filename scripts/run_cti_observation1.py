@@ -71,6 +71,8 @@ def main() -> int:
     parser.add_argument("--cti-max-tokens", type=int, default=64)
     parser.add_argument("--mitre-max-tokens", type=int, default=16)
     parser.add_argument("--data-source-max-tokens", type=int, default=32)
+    parser.add_argument("--classifier-objective-chars", type=int, default=300)
+    parser.add_argument("--mitre-name-style", choices=["ids", "compact", "full"], default="compact")
     parser.add_argument("--kql-max-tokens", type=int, default=16)
     parser.add_argument("--rule-max-tokens", type=int, default=16)
     parser.add_argument("--mock", action="store_true")
@@ -107,10 +109,13 @@ def main() -> int:
     data_dir = _resolve_data_dir(args)
     all_records = load_cti_realm_records(data_dir, args.dataset_size, limit=0)
     data_source_catalog = build_data_source_catalog(all_records)
-    mitre_catalog = build_mitre_catalog(all_records)
+    mitre_catalog = build_mitre_catalog(all_records, name_style=args.mitre_name_style)
     platforms = sorted({record.platform for record in all_records})
     mitre_catalog_by_platform = {
-        platform: build_mitre_catalog([record for record in all_records if record.platform == platform])
+        platform: build_mitre_catalog(
+            [record for record in all_records if record.platform == platform],
+            name_style=args.mitre_name_style,
+        )
         for platform in platforms
     }
     platform_mitre_sizes = ",".join(
@@ -121,6 +126,8 @@ def main() -> int:
         f"Loaded {len(records)} records; "
         f"data_source_catalog_size={len(data_source_catalog)} "
         f"mitre_catalog_size={len(mitre_catalog)} "
+        f"mitre_name_style={args.mitre_name_style} "
+        f"classifier_objective_chars={args.classifier_objective_chars} "
         f"platform_mitre_catalog_sizes={platform_mitre_sizes}",
         flush=True,
     )
@@ -161,6 +168,7 @@ def main() -> int:
                     mitre_catalog=mitre_catalog_by_platform.get(record.platform, mitre_catalog),
                     use_mitre_prior=args.mitre_use_prior,
                     use_data_source_prior=args.data_source_use_prior,
+                    classifier_objective_chars=args.classifier_objective_chars,
                 )
                 score = score_cti_proxy(record, stage_results)
                 row = {

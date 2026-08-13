@@ -193,7 +193,9 @@ def _compact_mitre_name(technique_id: str) -> str:
     return compact[:28]
 
 
-def build_mitre_catalog(records: list[CTIRecord]) -> list[str]:
+def build_mitre_catalog(records: list[CTIRecord], name_style: str = "compact") -> list[str]:
+    if name_style not in {"ids", "compact", "full"}:
+        raise ValueError(f"unknown MITRE catalog name_style: {name_style}")
     seen = set()
     catalog = []
     for record in records:
@@ -202,7 +204,13 @@ def build_mitre_catalog(records: list[CTIRecord]) -> list[str]:
             if not key or key in seen:
                 continue
             seen.add(key)
-            catalog.append(f"{key}={_compact_mitre_name(key)}")
+            if name_style == "ids":
+                catalog.append(key)
+            elif name_style == "full":
+                name = MITRE_TECHNIQUE_NAMES.get(key)
+                catalog.append(f"{key}: {name}" if name else key)
+            else:
+                catalog.append(f"{key}={_compact_mitre_name(key)}")
     return sorted(catalog)
 
 
@@ -253,9 +261,10 @@ def _messages_for_stage(
     mitre_catalog: list[str] | None = None,
     use_mitre_prior: bool = False,
     use_data_source_prior: bool = False,
+    classifier_objective_chars: int = MAX_CLASSIFIER_OBJECTIVE_CHARS,
 ) -> list[dict[str, str]]:
     objective = _clip(record.detection_objective, MAX_OBJECTIVE_CHARS)
-    classifier_objective = _clip(record.detection_objective, MAX_CLASSIFIER_OBJECTIVE_CHARS)
+    classifier_objective = _clip(record.detection_objective, classifier_objective_chars)
     platform = record.platform
     prior = _prior_block(stage_outputs)
     catalog = ", ".join(data_source_catalog or [])
@@ -394,6 +403,7 @@ def run_cti_workflow(
     mitre_catalog: list[str] | None = None,
     use_mitre_prior: bool = False,
     use_data_source_prior: bool = False,
+    classifier_objective_chars: int = MAX_CLASSIFIER_OBJECTIVE_CHARS,
 ) -> list[CTIStageResult]:
     if len(placement) != len(CTI_STAGES):
         raise ValueError(f"placement must have {len(CTI_STAGES)} tiers")
@@ -421,6 +431,7 @@ def run_cti_workflow(
                 mitre_catalog=mitre_catalog,
                 use_mitre_prior=use_mitre_prior,
                 use_data_source_prior=use_data_source_prior,
+                classifier_objective_chars=classifier_objective_chars,
             )
             prompt_chars = sum(len(message["content"]) for message in messages)
             print(

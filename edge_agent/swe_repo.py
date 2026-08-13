@@ -138,6 +138,19 @@ def _issue_code_lines(issue: str) -> list[str]:
     return lines[:6]
 
 
+def _issue_traceback_files(issue: str, repo_path: Path) -> list[str]:
+    candidates = []
+    for match in re.findall(r'File\s+"([^"]+\.py)"', issue):
+        normalized = match.replace("\\", "/").replace("/./", "/")
+        for anchor in ("/tests/", "/src/"):
+            if anchor in normalized:
+                rel = normalized.split(anchor, 1)[1]
+                rel = anchor.strip("/") + "/" + rel
+                if (repo_path / rel).exists():
+                    candidates.append(rel)
+    return list(dict.fromkeys(candidates))
+
+
 def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 900) -> str:
     lines = text.splitlines()
     selected: set[int] = set()
@@ -199,14 +212,16 @@ def _extract_likely_files(results: list[SWEStageResult], repo_path: Path, issue:
         text = results[-1].output
         try:
             parsed = json.loads(text)
-            likely = parsed.get("likely_files", [])
-            if isinstance(likely, str):
-                likely = [likely]
-            if isinstance(likely, list):
-                candidates.extend(str(item) for item in likely)
+            if isinstance(parsed, dict):
+                likely = parsed.get("likely_files", [])
+                if isinstance(likely, str):
+                    likely = [likely]
+                if isinstance(likely, list):
+                    candidates.extend(str(item) for item in likely)
         except json.JSONDecodeError:
             pass
         candidates.extend(re.findall(r"[A-Za-z0-9_./-]+\.py", text))
+    candidates.extend(_issue_traceback_files(issue, repo_path))
     candidates.extend(path for path in available if path in issue)
 
     selected = []
@@ -303,21 +318,38 @@ def extract_unified_diff(text: str) -> str:
     return _clip(candidate.rstrip() + "\n", MAX_PATCH_CHARS)
 
 
-def _extract_json_object(text: str) -> dict[str, Any]:
+def _extract_json_value(text: str) -> Any:
     fenced = re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.S | re.I)
     candidates = fenced + [text]
     for candidate in candidates:
         candidate = candidate.strip()
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
         start = candidate.find("{")
         end = candidate.rfind("}")
-        if start < 0 or end < start:
-            continue
-        try:
-            parsed = json.loads(candidate[start : end + 1])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
+        if 0 <= start < end:
+            try:
+                return json.loads(candidate[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+        start = candidate.find("[")
+        end = candidate.rfind("]")
+        if 0 <= start < end:
+            try:
+                return json.loads(candidate[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+    return {}
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    parsed = _extract_json_value(text)
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list):
+        return {"edits": parsed}
     return {}
 
 
@@ -347,8 +379,9 @@ def _edit_plan_to_diff(repo_path: Path, text: str) -> str:
 
         line_number = edit.get("line")
         new_line = edit.get("new")
-        if isinstance(line_number, str) and line_number.strip().isdigit():
-            line_number = int(line_number.strip())
+        if isinstance(line_number, str):
+            line_match = re.search(r"\d+", line_number)
+            line_number = int(line_match.group(0)) if line_match else line_number
         if isinstance(line_number, int) and isinstance(new_line, str):
             current_lines = current.splitlines(keepends=True)
             if 1 <= line_number <= len(current_lines):
@@ -490,19 +523,6 @@ def _run_python_validation(
         "stdout": completed.stdout[-4000:],
         "stderr": completed.stderr[-4000:],
     }
-
-
-def _issue_traceback_files(issue: str, repo_path: Path) -> list[str]:
-    candidates = []
-    for match in re.findall(r'File\s+"([^"]+\.py)"', issue):
-        normalized = match.replace("\\", "/").replace("/./", "/")
-        for anchor in ("/tests/", "/src/"):
-            if anchor in normalized:
-                rel = normalized.split(anchor, 1)[1]
-                rel = anchor.strip("/") + "/" + rel
-                if (repo_path / rel).exists():
-                    candidates.append(rel)
-    return list(dict.fromkeys(candidates))
 
 
 def _issue_python_blocks(issue: str) -> list[str]:

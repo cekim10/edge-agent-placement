@@ -100,3 +100,14 @@ python3 scripts/run_swe_testrepo_observation1.py \
 
 Prompts are written under `outputs/swe_testrepo_observation1_<timestamp>/prompts/`.
 Use `--no-prior` to test whether prior stage outputs are triggering a prompt-specific hang.
+
+
+To isolate prompt-specific vLLM hangs in Stage B:
+
+```bash
+CLOUD_MODEL=Qwen/Qwen2.5-7B-Instruct \
+python3 scripts/probe_swe_stage_prompt.py \
+  --repo-path ~/test-repo \
+  --timeout-s 30 \
+  --max-tokens 1
+```

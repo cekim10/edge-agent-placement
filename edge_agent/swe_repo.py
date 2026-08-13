@@ -261,11 +261,8 @@ def messages_for_swe_stage(
         context = _repo_tree_context(repo_path)
     else:
         context = _localized_repo_context(repo_path, results, task.problem_statement)
-    prior = _prior_block(results) if include_prior else "None"
-    system = (
-        "You are a deterministic software engineering agent working on a real "
-        "GitHub repository. Follow the requested output format exactly."
-    )
+    prior = _prior_block(results) if include_prior and results else ""
+    system = "You are a deterministic software engineering agent. Return exactly what is requested."
     if stage == "issue_analysis":
         user = (
             "Stage A: triage the GitHub issue using the repo tree. Return compact JSON "
@@ -273,17 +270,18 @@ def messages_for_swe_stage(
             f"ISSUE:\n{issue}\n\nREPOSITORY_CONTEXT:\n{context}"
         )
     elif stage == "patch_generation":
+        prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         user = (
-            "Edit selected files. Return a JSON object only. The object has key edits. "
-            "Each edit has keys file, find, replace. The find value must be exact text copied from a FILE_SNIPPET block. "
-            "If unsure, return an empty edits list. No markdown.\n\n"
-            f"ISSUE:\n{issue}\n\n{context}\n\nPRIOR:\n{prior}"
+            "Return a JSON object only with key edits. Each edit has keys file, find, replace. "
+            "If unsure return an empty edits list.\n\n"
+            f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
     elif stage == "test_repair":
+        prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         user = (
-            "Review the prior edit. Return a JSON object only with key edits. "
-            "Keep or improve the edit. If unsure, return an empty edits list. No markdown.\n\n"
-            f"ISSUE:\n{issue}\n\n{context}\n\nPRIOR:\n{prior}"
+            "Return a JSON object only with key edits. Each edit has keys file, find, replace. "
+            "Keep or improve the prior edit. If unsure return an empty edits list.\n\n"
+            f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
     else:
         raise ValueError(f"unknown SWE stage: {stage}")

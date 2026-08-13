@@ -24,6 +24,7 @@ from edge_agent.appworld_harness import (  # noqa: E402
     load_appworld_task_ids,
     placement_for_edge_appworld_stage,
     placement_name,
+    preview_appworld_prompts,
     run_appworld_workflow,
 )
 from edge_agent.client import build_client  # noqa: E402
@@ -89,6 +90,7 @@ def main() -> int:
     parser.add_argument("--code-max-tokens", type=int, default=384)
     parser.add_argument("--verify-max-tokens", type=int, default=256)
     parser.add_argument("--dump-prompts", action="store_true")
+    parser.add_argument("--dry-run-prompts", action="store_true", help="Load AppWorld tasks and dump prompt sizes without LLM calls")
     parser.add_argument("--mock", action="store_true")
     parser.add_argument(
         "--only-placement",
@@ -124,6 +126,32 @@ def main() -> int:
     run_dir = args.output_dir / f"appworld_observation1_{stamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
     prompt_dir = run_dir / "prompts" if args.dump_prompts else None
+
+    if args.dry_run_prompts:
+        rows = []
+        prompt_preview_dir = run_dir / "prompt_previews"
+        prompt_preview_dir.mkdir(parents=True, exist_ok=True)
+        for task_id in task_ids:
+            preview = preview_appworld_prompts(
+                task_id=task_id,
+                dataset_name=args.dataset_name,
+                appworld_root=args.appworld_root,
+            )
+            (prompt_preview_dir / f"{task_id}.json").write_text(
+                json.dumps(preview, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            for stage in preview["stages"]:
+                row = {"task_id": task_id, "stage": stage["stage"], "prompt_chars": stage["prompt_chars"]}
+                rows.append(row)
+                print(f"{task_id} {stage['stage']} prompt_chars={stage['prompt_chars']}", flush=True)
+        csv_path = run_dir / "prompt_sizes.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["task_id", "stage", "prompt_chars"])
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"Wrote {csv_path}")
+        return 0
 
     variants = [args.only_placement] if args.only_placement else ["all_cloud", *APPWORLD_STAGES, "all_edge"]
     metrics = []

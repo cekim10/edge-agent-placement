@@ -20,11 +20,12 @@ from .client import ChatClient
 
 APPWORLD_STAGES = ("task_analysis", "api_planning", "code_generation", "execution_verification")
 
-MAX_INSTRUCTION_CHARS = 900
-MAX_APP_DESCRIPTIONS_CHARS = 1800
-MAX_STAGE_OUTPUT_CHARS = 1800
-MAX_EXECUTION_OUTPUT_CHARS = 2400
-MAX_EVALUATION_CHARS = 2200
+MAX_INSTRUCTION_CHARS = 650
+MAX_APP_DESCRIPTIONS_CHARS = 520
+MAX_STAGE_OUTPUT_CHARS = 900
+MAX_EXECUTION_OUTPUT_CHARS = 1000
+MAX_EVALUATION_CHARS = 1000
+MAX_API_DOCS_CHARS = 1400
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,7 @@ def _extract_code(text: str) -> str:
 def _summarize_app_descriptions(app_descriptions: dict[str, Any]) -> str:
     lines = []
     for name, description in sorted(app_descriptions.items()):
-        lines.append(f"- {name}: {_clip(description, 220)}")
+        lines.append(f"- {name}: {_clip(description, 80)}")
     return _clip("\n".join(lines), MAX_APP_DESCRIPTIONS_CHARS)
 
 
@@ -160,8 +161,8 @@ def _api_docs_preview(task: Any, selected_apps: list[str]) -> str:
             doc = getattr(api_docs, app_name)
         except Exception:
             continue
-        chunks.append(f"{app_name} APIs:\n{_clip(doc, 1800)}")
-    return _clip("\n\n".join(chunks), 5000)
+        chunks.append(f"{app_name} APIs:\n{_clip(doc, 650)}")
+    return _clip("\n\n".join(chunks), MAX_API_DOCS_CHARS)
 
 
 def _task_info_from_world(task_id: str, dataset_name: str, world: Any, results: list[AppWorldStageResult] | None = None) -> AppWorldTaskInfo:
@@ -236,38 +237,68 @@ def messages_for_appworld_stage(
     prior = _clip("\n\n".join(f"{item.stage}: {item.output}" for item in results), MAX_STAGE_OUTPUT_CHARS)
     exec_text = _clip(execution_outputs[-1]["output"], MAX_EXECUTION_OUTPUT_CHARS) if execution_outputs else ""
     eval_text = _clip(evaluation or {}, MAX_EVALUATION_CHARS) if evaluation else ""
-    api_docs = _clip(task_info.api_docs_preview, 5000)
-    supervisor = _clip(task_info.supervisor, 700)
+    api_docs = _clip(task_info.api_docs_preview, MAX_API_DOCS_CHARS)
+    supervisor = _clip(task_info.supervisor, 320)
 
-    system = "You are a deterministic AppWorld agent. Follow the requested output format exactly."
+    system = "You are a deterministic AppWorld agent."
     if stage == "task_analysis":
         user = (
-            "Stage A: analyze the AppWorld task. Return JSON only with keys "
-            "task_summary, relevant_apps, plan, completion_condition.\n\n"
-            f"INSTRUCTION:\n{instruction}\n\nSUPERVISOR:\n{supervisor}\n\nAPPS:\n{apps}"
+            "Return JSON only: task_summary, relevant_apps, plan.\n\n"
+            f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}"
         )
     elif stage == "api_planning":
         user = (
-            "Stage B: choose the app APIs needed to solve the task. Return JSON only with keys "
-            "selected_apps, api_needs, execution_plan. Do not write code.\n\n"
+            "Return JSON only: selected_apps, api_needs, execution_plan. No code.\n\n"
             f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}\n\nPRIOR:\n{prior}"
         )
     elif stage == "code_generation":
         user = (
-            "Stage C: write one Python code block for AppWorld world.execute. Use functional API calls "
-            "as apis.<app>.<api>(...). Print useful intermediate values. End by calling "
-            "apis.supervisor.complete_task(...) when done. Return Python code only.\n\n"
+            "Return Python code only for world.execute. Use apis.<app>.<api>(...). "
+            "Call apis.supervisor.complete_task(...) when done.\n\n"
             f"INSTRUCTION:\n{instruction}\n\nSUPERVISOR:\n{supervisor}\n\nAPI_DOCS:\n{api_docs}\n\nPRIOR:\n{prior}"
         )
     elif stage == "execution_verification":
         user = (
-            "Stage D: inspect the last execution/evaluation. If the task is done, return empty code. "
-            "Otherwise return one Python repair code block for world.execute. Return code only.\n\n"
+            "Return empty code if done; otherwise return one Python repair code block only.\n\n"
             f"INSTRUCTION:\n{instruction}\n\nLAST_EXECUTION:\n{exec_text}\n\nEVALUATION:\n{eval_text}\n\nPRIOR:\n{prior}"
         )
     else:
         raise ValueError(f"unknown AppWorld stage: {stage}")
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def preview_appworld_prompts(
+    *,
+    task_id: str,
+    dataset_name: str,
+    appworld_root: Path | None = None,
+) -> dict[str, Any]:
+    AppWorld, _load_task_ids, update_root = import_appworld()
+    if appworld_root is not None:
+        update_root(str(appworld_root))
+    previews = []
+    with AppWorld(task_id=task_id, experiment_name="edge_agent_appworld_prompt_preview") as world:
+        results: list[AppWorldStageResult] = []
+        execution_outputs: list[dict[str, Any]] = []
+        evaluation: dict[str, Any] = {}
+        for stage in APPWORLD_STAGES:
+            task_info = _task_info_from_world(task_id, dataset_name, world, results)
+            messages = messages_for_appworld_stage(
+                task_info=task_info,
+                stage=stage,
+                results=results,
+                execution_outputs=execution_outputs,
+                evaluation=evaluation,
+            )
+            previews.append(
+                {
+                    "stage": stage,
+                    "prompt_chars": sum(len(message["content"]) for message in messages),
+                    "messages": messages,
+                }
+            )
+            results.append(AppWorldStageResult(stage=stage, tier="cloud", latency_s=0.0, output="{}"))
+    return {"task_id": task_id, "dataset_name": dataset_name, "stages": previews}
 
 
 def _evaluation_to_dict(world: Any) -> dict[str, Any]:

@@ -69,6 +69,16 @@ python3 scripts/run_appworld_observation1.py --mock --limit 2 --only-placement a
 Start with a tiny dev-set pilot. Do not run placement variants until this is
 stable.
 
+First check prompt sizes without LLM calls:
+
+```bash
+python3 scripts/run_appworld_observation1.py \
+  --appworld-root ~/appworld-pip \
+  --dataset-name dev \
+  --limit 3 \
+  --dry-run-prompts
+```
+
 ```bash
 CLOUD_MODEL=Qwen/Qwen2.5-32B-Instruct-AWQ \
 python3 scripts/run_appworld_observation1.py \

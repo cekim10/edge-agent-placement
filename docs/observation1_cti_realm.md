@@ -116,10 +116,10 @@ This avoids Qwen/vLLM stalls in long KQL/rule-generation completions while
 preserving the MITRE/data-source scoring signal needed for the first
 stage-sensitivity figure. The proxy finalizer does not read ground truth; it
 only parses MITRE IDs and data-source names from prior model outputs. C1 is
-given a dataset-wide MITRE technique catalog and C2 is given a dataset-wide
-data-source catalog, analogous to bounded analyst lookup/tool context; neither
-stage receives per-task ground truth. Do not use this as the final CTI-REALM C4
-result.
+given a dataset-wide MITRE technique catalog with stable technique names and
+C2 is given a dataset-wide data-source catalog, analogous to bounded analyst
+lookup/tool context; neither stage receives per-task ground truth. Do not use
+this as the final CTI-REALM C4 result.
 
 Local smoke test without vLLM:
 

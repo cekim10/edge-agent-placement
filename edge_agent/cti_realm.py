@@ -43,6 +43,46 @@ MAX_PRIOR_CHARS = 800
 MAX_PRIOR_STAGE_CHARS = 220
 
 
+MITRE_TECHNIQUE_NAMES = {
+    "T1003": "OS Credential Dumping",
+    "T1005": "Data from Local System",
+    "T1041": "Exfiltration Over C2 Channel",
+    "T1046": "Network Service Discovery",
+    "T1053": "Scheduled Task/Job",
+    "T1059": "Command and Scripting Interpreter",
+    "T1068": "Exploitation for Privilege Escalation",
+    "T1069": "Permission Groups Discovery",
+    "T1070": "Indicator Removal",
+    "T1078": "Valid Accounts",
+    "T1082": "System Information Discovery",
+    "T1083": "File and Directory Discovery",
+    "T1098": "Account Manipulation",
+    "T1110": "Brute Force",
+    "T1136": "Create Account",
+    "T1210": "Exploitation of Remote Services",
+    "T1484": "Domain or Tenant Policy Modification",
+    "T1496": "Resource Hijacking",
+    "T1525": "Implant Internal Image",
+    "T1530": "Data from Cloud Storage",
+    "T1537": "Transfer Data to Cloud Account",
+    "T1543": "Create or Modify System Process",
+    "T1547": "Boot or Logon Autostart Execution",
+    "T1548": "Abuse Elevation Control Mechanism",
+    "T1552": "Unsecured Credentials",
+    "T1555": "Credentials from Password Stores",
+    "T1562": "Impair Defenses",
+    "T1578": "Modify Cloud Compute Infrastructure",
+    "T1609": "Container and Resource Discovery",
+    "T1610": "Deploy Container",
+    "T1611": "Escape to Host",
+    "T1613": "Container and Resource Discovery",
+    "T1619": "Cloud Storage Object Discovery",
+    "T1649": "Steal or Forge Authentication Certificates",
+    "T1651": "Cloud Administration Command",
+    "T1654": "Log Enumeration",
+}
+
+
 @dataclass(frozen=True)
 class CTIRecord:
     task_id: str
@@ -153,7 +193,8 @@ def build_mitre_catalog(records: list[CTIRecord]) -> list[str]:
             if not key or key in seen:
                 continue
             seen.add(key)
-            catalog.append(key)
+            name = MITRE_TECHNIQUE_NAMES.get(key)
+            catalog.append(f"{key}: {name}" if name else key)
     return sorted(catalog)
 
 
@@ -248,6 +289,8 @@ def _messages_for_stage(
         mitre_prior = f"\nPRIOR_STAGE_OUTPUTS:\n{prior}" if use_mitre_prior else ""
         user = (
             "Select exactly one MITRE ATT&CK technique ID from AVAILABLE_MITRE_TECHNIQUES.\n"
+            "Use the technique names to distinguish behavior: credentials, secrets, tokens, certificates, "
+            "service accounts, passwords, and keys are credential-access behavior, not command execution.\n"
             "Return minified JSON only, for example {\\\"mitre_techniques\\\":[\\\"T1552\\\"]}.\n\n"
             f"PLATFORM: {platform}\n"
             f"DETECTION_OBJECTIVE:\n{objective}\n"

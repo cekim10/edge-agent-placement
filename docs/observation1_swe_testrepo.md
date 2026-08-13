@@ -83,3 +83,20 @@ Interpretation target:
 - `edge_patch_generation` should usually hurt more than `edge_issue_analysis`.
 - `edge_test_repair` measures whether a weak final reviewer breaks or fails to
   repair otherwise plausible patches.
+
+
+## Prompt Debugging
+
+If a vLLM endpoint hangs on a specific stage, dump the exact OpenAI-compatible
+messages:
+
+```bash
+python3 scripts/run_swe_testrepo_observation1.py \
+  --repo-path ~/test-repo \
+  --limit 1 \
+  --only-placement all_cloud \
+  --dump-prompts
+```
+
+Prompts are written under `outputs/swe_testrepo_observation1_<timestamp>/prompts/`.
+Use `--no-prior` to test whether prior stage outputs are triggering a prompt-specific hang.

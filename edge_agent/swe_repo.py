@@ -210,13 +210,14 @@ def messages_for_swe_stage(
     repo_path: Path,
     stage: str,
     results: list[SWEStageResult],
+    include_prior: bool = True,
 ) -> list[dict[str, str]]:
     issue = _clip(task.problem_statement, MAX_ISSUE_CHARS)
     if stage == "issue_analysis":
         context = _repo_tree_context(repo_path)
     else:
         context = _localized_repo_context(repo_path, results, task.problem_statement)
-    prior = _prior_block(results)
+    prior = _prior_block(results) if include_prior else "None"
     system = (
         "You are a deterministic software engineering agent working on a real "
         "GitHub repository. Follow the requested output format exactly."
@@ -388,6 +389,8 @@ def run_swe_workflow(
     task: SWEIssueTask,
     repo_path: Path,
     placement: tuple[str, ...],
+    dump_prompt_dir: Path | None = None,
+    include_prior: bool = True,
 ) -> tuple[list[SWEStageResult], str]:
     if len(placement) != len(SWE_STAGES):
         raise ValueError(f"placement must have {len(SWE_STAGES)} tiers")
@@ -395,8 +398,22 @@ def run_swe_workflow(
     final_patch = ""
     incident = task.to_incident()
     for stage, tier in zip(SWE_STAGES, placement):
-        messages = messages_for_swe_stage(task=task, repo_path=repo_path, stage=stage, results=results)
+        messages = messages_for_swe_stage(
+            task=task,
+            repo_path=repo_path,
+            stage=stage,
+            results=results,
+            include_prior=include_prior,
+        )
         prompt_chars = sum(len(message["content"]) for message in messages)
+        if dump_prompt_dir is not None:
+            dump_prompt_dir.mkdir(parents=True, exist_ok=True)
+            safe_task_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", task.task_id)
+            dump_path = dump_prompt_dir / f"{safe_task_id}_{stage}.json"
+            dump_path.write_text(
+                json.dumps({"stage": stage, "tier": tier, "messages": messages}, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
         print(f"  stage_start stage={stage} tier={tier} prompt_chars={prompt_chars}", flush=True)
         started = time.perf_counter()
         output = client.chat(tier=tier, stage=stage, messages=messages, incident=incident)

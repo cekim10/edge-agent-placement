@@ -63,6 +63,8 @@ def main() -> int:
     parser.add_argument("--patch-max-tokens", type=int, default=768)
     parser.add_argument("--repair-max-tokens", type=int, default=768)
     parser.add_argument("--test-timeout-s", type=float, default=20.0)
+    parser.add_argument("--dump-prompts", action="store_true")
+    parser.add_argument("--no-prior", action="store_true", help="Do not pass prior stage outputs to later stages")
     parser.add_argument("--mock", action="store_true")
     parser.add_argument(
         "--only-placement",
@@ -90,6 +92,7 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     variants = [args.only_placement] if args.only_placement else ["all_cloud", *SWE_STAGES, "all_edge"]
+    prompt_dir = run_dir / "prompts" if args.dump_prompts else None
     metrics = []
     print(f"Loaded {len(tasks)} tasks from {args.repo_path}", flush=True)
     for edge_stage in variants:
@@ -108,6 +111,8 @@ def main() -> int:
                         task=task,
                         repo_path=worktree,
                         placement=placement,
+                        dump_prompt_dir=prompt_dir / label if prompt_dir is not None else None,
+                        include_prior=not args.no_prior,
                     )
                     patch_result = apply_patch(worktree, final_patch)
                     test_result = run_pytest(worktree, timeout_s=args.test_timeout_s) if patch_result["applied"] else {

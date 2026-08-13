@@ -18,14 +18,14 @@ from typing import Any
 from .client import ChatClient
 
 
-APPWORLD_STAGES = ("task_analysis", "api_planning", "code_generation", "execution_verification")
+APPWORLD_STAGES = ("task_analysis", "api_doc_lookup", "code_generation", "execution_verification")
 
 MAX_INSTRUCTION_CHARS = 650
 MAX_APP_DESCRIPTIONS_CHARS = 520
-MAX_STAGE_OUTPUT_CHARS = 520
+MAX_STAGE_OUTPUT_CHARS = 900
 MAX_EXECUTION_OUTPUT_CHARS = 1000
 MAX_EVALUATION_CHARS = 1000
-MAX_API_DOCS_CHARS = 180
+MAX_API_DOCS_CHARS = 420
 
 
 @dataclass(frozen=True)
@@ -137,7 +137,7 @@ def _selected_apps_from_results(results: list[AppWorldStageResult]) -> list[str]
         parsed = _json_loads_loose(result.output)
         if not isinstance(parsed, dict):
             continue
-        for key in ("selected_apps", "relevant_apps"):
+        for key in ("selected_apps", "relevant_apps", "apps"):
             value = parsed.get(key, [])
             if isinstance(value, str):
                 value = [value]
@@ -146,11 +146,63 @@ def _selected_apps_from_results(results: list[AppWorldStageResult]) -> list[str]
     return list(dict.fromkeys(apps))[:4]
 
 
+def _apps_for_task(task_info: AppWorldTaskInfo, results: list[AppWorldStageResult]) -> list[str]:
+    available = list(task_info.app_descriptions)
+    available_set = set(available)
+    apps: list[str] = []
+    for app_name in _selected_apps_from_results(results):
+        if not available_set or app_name in available_set:
+            apps.append(app_name)
+
+    instruction = task_info.instruction.lower()
+    for app_name in available:
+        if app_name.lower() in instruction:
+            apps.append(app_name)
+
+    if not apps:
+        for fallback in ("spotify", "gmail", "google_calendar", "phone", "amazon"):
+            if fallback in available_set:
+                apps.append(fallback)
+                break
+    return list(dict.fromkeys(apps))[:4]
+
+
+def _doc_lookup_code(selected_apps: list[str]) -> str:
+    apps = [app for app in (selected_apps or ["spotify"]) if app not in {"api_docs", "supervisor"}]
+    lines = [
+        "def show(label, func):",
+        "    try:",
+        "        print('\\n## ' + label)",
+        "        print(func())",
+        "    except Exception as exc:",
+        "        print('\\n## ' + label + ' ERROR')",
+        "        print(type(exc).__name__ + ': ' + str(exc))",
+        "",
+        "show('supervisor account passwords', lambda: apis.supervisor.show_account_passwords())",
+        "show('supervisor complete_task doc', lambda: apis.api_docs.show_api_doc('supervisor', 'complete_task'))",
+    ]
+    for app_name in apps[:3]:
+        lines.extend(
+            [
+                f"show('{app_name} available API names', lambda: [name for name in dir(apis.{app_name}) if not name.startswith('_')])",
+                f"show('{app_name} api descriptions', lambda: apis.api_docs.show_api_descriptions('{app_name}'))",
+                f"show('{app_name} login doc', lambda: apis.api_docs.show_api_doc('{app_name}', 'login'))",
+            ]
+        )
+        for api_name in ("show_profile", "show_account", "show_playlists", "show_playlist", "show_tracks", "show_track"):
+            lines.append(
+                f"show('{app_name} {api_name} doc', lambda: apis.api_docs.show_api_doc('{app_name}', '{api_name}'))"
+            )
+    return "\n".join(lines)
+
+
 def _compact_prior(results: list[AppWorldStageResult]) -> str:
     compact: list[dict[str, Any]] = []
     for result in results:
         parsed = _json_loads_loose(result.output)
-        if isinstance(parsed, dict):
+        if result.stage in {"api_doc_lookup", "api_doc_output"}:
+            compact.append({"stage": result.stage, "output": _clip(result.output, 700)})
+        elif isinstance(parsed, dict):
             item = {
                 key: parsed[key]
                 for key in ("relevant_apps", "selected_apps", "api_needs", "execution_plan", "plan")
@@ -253,7 +305,7 @@ def messages_for_appworld_stage(
 ) -> list[dict[str, str]]:
     instruction = _clip(task_info.instruction, MAX_INSTRUCTION_CHARS)
     apps = _summarize_app_descriptions(task_info.app_descriptions)
-    selected_apps = _selected_apps_from_results(results)
+    selected_apps = _apps_for_task(task_info, results)
     selected_apps_text = ", ".join(selected_apps)
     prior = _compact_prior(results)
     exec_text = _clip(execution_outputs[-1]["output"], MAX_EXECUTION_OUTPUT_CHARS) if execution_outputs else ""
@@ -273,19 +325,24 @@ def messages_for_appworld_stage(
             "Return JSON only: task_summary, relevant_apps, plan.\n\n"
             f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}"
         )
-    elif stage == "api_planning":
+    elif stage == "api_doc_lookup":
         user = (
-            "Return JSON only: selected_apps, api_needs, execution_plan. No code.\n\n"
+            "This stage is executed deterministically by the harness. "
+            "Return {} only.\n\n"
             f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}\n\nRELEVANT_APPS:\n{selected_apps_text}"
         )
     elif stage == "code_generation":
         user = (
-            f"{appworld_rules} Return Python code only.\n\n"
-            f"TASK:\n{_clip(instruction, 320)}\n\nAPPS:\n{selected_apps_text}\n\nAPI_DOCS:\n{api_docs}\n\nPLAN:\n{_clip(prior, 80)}"
+            f"{appworld_rules} Do not write import statements. "
+            "Use the API names shown in PLAN/API_DOCS. Always call apis.supervisor.complete_task(...); "
+            "for answer tasks pass answer as a comma-separated string. Return Python code only.\n\n"
+            f"TASK:\n{_clip(instruction, 320)}\n\nAPPS:\n{selected_apps_text}\n\nAPI_DOCS:\n{api_docs}\n\nPLAN_AND_DOC_OUTPUT:\n{_clip(prior, 760)}"
         )
     elif stage == "execution_verification":
         user = (
-            f"{appworld_rules} Return empty code if done; otherwise one Python repair code block only.\n\n"
+            f"{appworld_rules} Do not write import statements. "
+            "If complete_task was not called or execution failed, return corrected Python code only. "
+            "If already successful, return empty text.\n\n"
             f"TASK:\n{_clip(instruction, 420)}\n\nLAST_EXECUTION:\n{_clip(exec_text, 420)}\n\nEVALUATION:\n{_clip(eval_text, 360)}\n\nPLAN:\n{_clip(prior, 160)}"
         )
     else:
@@ -407,6 +464,22 @@ def run_appworld_workflow(
                     f"prompt_chars={sum(len(message['content']) for message in messages)}",
                     flush=True,
                 )
+                if stage == "api_doc_lookup":
+                    output = _doc_lookup_code(_apps_for_task(task_info, stages))
+                    print(f"  stage_done stage={stage} tier={tier} latency_s=0.00 output_chars={len(output)}", flush=True)
+                    stages.append(AppWorldStageResult(stage=stage, tier=tier, latency_s=0.0, output=output))
+                    exec_started = time.perf_counter()
+                    exec_output = world.execute(output)
+                    execution_outputs.append(
+                        {
+                            "stage": stage,
+                            "latency_s": time.perf_counter() - exec_started,
+                            "code": output,
+                            "output": str(exec_output),
+                        }
+                    )
+                    stages.append(AppWorldStageResult(stage="api_doc_output", tier="local", latency_s=0.0, output=str(exec_output)))
+                    continue
                 started = time.perf_counter()
                 output = client.chat(tier=tier, stage=stage, messages=messages, incident=task_info.to_incident())
                 latency_s = time.perf_counter() - started
@@ -478,8 +551,6 @@ class AppWorldMockClient:
         del tier, messages, incident
         if stage == "task_analysis":
             return json.dumps({"task_summary": "mock", "relevant_apps": ["supervisor"], "plan": ["complete"]})
-        if stage == "api_planning":
-            return json.dumps({"selected_apps": ["supervisor"], "api_needs": [], "execution_plan": ["complete"]})
         if stage == "code_generation":
             return "apis.supervisor.complete_task()"
         return ""

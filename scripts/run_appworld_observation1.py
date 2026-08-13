@@ -86,7 +86,7 @@ def main() -> int:
     parser.add_argument("--timeout-s", type=float, default=180.0)
     parser.add_argument("--max-tokens", type=int, default=384)
     parser.add_argument("--analysis-max-tokens", type=int, default=160)
-    parser.add_argument("--api-plan-max-tokens", type=int, default=160)
+    parser.add_argument("--api-plan-max-tokens", type=int, default=160, help="Legacy name for api_doc_lookup max tokens")
     parser.add_argument("--code-max-tokens", type=int, default=384)
     parser.add_argument("--verify-max-tokens", type=int, default=256)
     parser.add_argument("--dump-prompts", action="store_true")
@@ -116,7 +116,7 @@ def main() -> int:
             max_tokens=args.max_tokens,
             max_tokens_by_stage={
                 "task_analysis": args.analysis_max_tokens,
-                "api_planning": args.api_plan_max_tokens,
+                "api_doc_lookup": args.api_plan_max_tokens,
                 "code_generation": args.code_max_tokens,
                 "execution_verification": args.verify_max_tokens,
             },

@@ -19,13 +19,13 @@ avoids LLM-as-judge scoring.
 Fixed workflow:
 
 ```text
-task_analysis -> api_planning -> code_generation -> execution_verification
+task_analysis -> api_doc_lookup -> code_generation -> execution_verification
 ```
 
 Interpretation:
 
 - `task_analysis`: task understanding and high-level plan.
-- `api_planning`: app/API selection before writing executable code.
+- `api_doc_lookup`: AppWorld API documentation lookup before writing executable code.
 - `code_generation`: executable `world.execute(...)` code.
 - `execution_verification`: one repair step after execution/evaluation.
 
@@ -80,16 +80,18 @@ python3 scripts/run_appworld_observation1.py \
 ```
 
 ```bash
-CLOUD_MODEL=Qwen/Qwen2.5-32B-Instruct-AWQ \
+CLOUD_MODEL=Qwen/Qwen2.5-14B-Instruct \
+APPWORLD_ROOT=~/appworld-pip \
 python3 scripts/run_appworld_observation1.py \
+  --appworld-root ~/appworld-pip \
   --dataset-name dev \
   --limit 3 \
   --only-placement all_cloud \
-  --timeout-s 180 \
+  --timeout-s 120 \
   --analysis-max-tokens 160 \
   --api-plan-max-tokens 160 \
-  --code-max-tokens 384 \
-  --verify-max-tokens 256 \
+  --code-max-tokens 128 \
+  --verify-max-tokens 64 \
   --dump-prompts
 ```
 
@@ -103,15 +105,17 @@ all-cloud success_rate >= 0.80: run stage sensitivity
 ## Stage Sensitivity
 
 ```bash
-CLOUD_MODEL=Qwen/Qwen2.5-32B-Instruct-AWQ \
+CLOUD_MODEL=Qwen/Qwen2.5-14B-Instruct \
+APPWORLD_ROOT=~/appworld-pip \
 python3 scripts/run_appworld_observation1.py \
+  --appworld-root ~/appworld-pip \
   --dataset-name dev \
   --limit 10 \
-  --timeout-s 180 \
+  --timeout-s 120 \
   --analysis-max-tokens 160 \
   --api-plan-max-tokens 160 \
-  --code-max-tokens 384 \
-  --verify-max-tokens 256 \
+  --code-max-tokens 128 \
+  --verify-max-tokens 64 \
   --dump-prompts
 ```
 

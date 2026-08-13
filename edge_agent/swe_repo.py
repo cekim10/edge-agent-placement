@@ -31,8 +31,9 @@ SWE_STAGES = ("issue_analysis", "patch_generation", "test_repair")
 
 MAX_ISSUE_CHARS = 1800
 MAX_TREE_CHARS = 3000
-MAX_CONTEXT_CHARS = 9000
-MAX_PRIOR_CHARS = 5000
+MAX_CONTEXT_CHARS = 5000
+MAX_LOCALIZED_CONTEXT_CHARS = 5000
+MAX_PRIOR_CHARS = 3500
 MAX_PATCH_CHARS = 12000
 
 
@@ -137,6 +138,61 @@ def _repo_context(repo_path: Path) -> str:
     return _clip("\n\n".join(chunks), MAX_CONTEXT_CHARS)
 
 
+def _all_repo_files(repo_path: Path) -> list[str]:
+    return [
+        str(path.relative_to(repo_path))
+        for path in sorted(repo_path.rglob("*"))
+        if path.is_file() and ".git" not in path.parts and "__pycache__" not in path.parts
+    ]
+
+
+def _extract_likely_files(results: list[SWEStageResult], repo_path: Path, issue: str) -> list[str]:
+    available = _all_repo_files(repo_path)
+    available_set = set(available)
+    candidates: list[str] = []
+    if results:
+        text = results[-1].output
+        try:
+            parsed = json.loads(text)
+            likely = parsed.get("likely_files", [])
+            if isinstance(likely, str):
+                likely = [likely]
+            if isinstance(likely, list):
+                candidates.extend(str(item) for item in likely)
+        except json.JSONDecodeError:
+            pass
+        candidates.extend(re.findall(r"[A-Za-z0-9_./-]+\.py", text))
+    candidates.extend(path for path in available if path in issue)
+
+    selected = []
+    seen = set()
+    for candidate in candidates:
+        candidate = candidate.strip().lstrip("./")
+        matches = [candidate] if candidate in available_set else [path for path in available if path.endswith(candidate)]
+        for match in matches:
+            if match not in seen:
+                seen.add(match)
+                selected.append(match)
+    if not selected:
+        selected = [path for path in available if path.endswith(".py")][:4]
+    return selected[:4]
+
+
+def _localized_repo_context(repo_path: Path, results: list[SWEStageResult], issue: str) -> str:
+    selected = _extract_likely_files(results, repo_path, issue)
+    chunks = [_repo_tree_context(repo_path), "SELECTED_FILES:\n" + "\n".join(selected)]
+    for rel in selected:
+        path = repo_path / rel
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        chunks.append(f"FILE: {rel}\n{text}")
+    return _clip("\n\n".join(chunks), MAX_LOCALIZED_CONTEXT_CHARS)
+
+
 def _prior_block(results: list[SWEStageResult]) -> str:
     if not results:
         return "None"
@@ -155,7 +211,10 @@ def messages_for_swe_stage(
     results: list[SWEStageResult],
 ) -> list[dict[str, str]]:
     issue = _clip(task.problem_statement, MAX_ISSUE_CHARS)
-    context = _repo_tree_context(repo_path) if stage == "issue_analysis" else _repo_context(repo_path)
+    if stage == "issue_analysis":
+        context = _repo_tree_context(repo_path)
+    else:
+        context = _localized_repo_context(repo_path, results, task.problem_statement)
     prior = _prior_block(results)
     system = (
         "You are a deterministic software engineering agent working on a real "

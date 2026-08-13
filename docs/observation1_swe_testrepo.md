@@ -23,7 +23,7 @@ issue_analysis -> patch_generation -> test_repair
 ```
 
 Stage A sees only the repository tree and issue text for triage/localization.
-Patch generation and test repair receive the Python file context.
+Patch generation and test repair receive localized Python file context selected from Stage A `likely_files`.
 
 Final quality:
 

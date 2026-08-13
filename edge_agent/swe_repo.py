@@ -225,7 +225,7 @@ def _extract_likely_files(results: list[SWEStageResult], repo_path: Path, issue:
 
 def _localized_repo_context(repo_path: Path, results: list[SWEStageResult], issue: str) -> str:
     selected = _extract_likely_files(results, repo_path, issue)
-    chunks = [_repo_tree_context(repo_path), "SELECTED_FILES:\n" + "\n".join(selected)]
+    chunks = ["SELECTED_FILES:\n" + "\n".join(selected)]
     for rel in selected:
         path = repo_path / rel
         if not path.exists() or not path.is_file():

@@ -144,10 +144,12 @@ def main() -> int:
                 rows.append(row)
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
                 handle.flush()
+                error_suffix = f" error={row['error']}" if row.get("error") else ""
                 print(
                     f"[{label}] task {index}/{len(tasks)} ok={row['ok']} "
                     f"applied={row['patch_apply'].get('applied')} "
-                    f"passed={row['test'].get('passed')} result={row['test'].get('result')}",
+                    f"passed={row['test'].get('passed')} result={row['test'].get('result')}"
+                    f"{error_suffix}",
                     flush=True,
                 )
         summary = _summarize(label, placement, rows)

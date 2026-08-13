@@ -30,11 +30,11 @@ from .client import ChatClient
 
 SWE_STAGES = ("issue_analysis", "patch_generation", "test_repair")
 
-MAX_ISSUE_CHARS = 1800
-MAX_TREE_CHARS = 3000
-MAX_CONTEXT_CHARS = 5000
-MAX_LOCALIZED_CONTEXT_CHARS = 3600
-MAX_PRIOR_CHARS = 1200
+MAX_ISSUE_CHARS = 900
+MAX_TREE_CHARS = 1800
+MAX_CONTEXT_CHARS = 4000
+MAX_LOCALIZED_CONTEXT_CHARS = 2400
+MAX_PRIOR_CHARS = 600
 MAX_PATCH_CHARS = 12000
 
 
@@ -111,6 +111,17 @@ def _clip(text: str, max_chars: int) -> str:
     return text[:max_chars].rstrip() + "\n[TRUNCATED]"
 
 
+def _sanitize_prompt_text(text: str) -> str:
+    text = text.replace("```", "")
+    text = text.replace("`", "'")
+    return text
+
+
+def _numbered_file_text(text: str, max_chars: int = 1600) -> str:
+    numbered = "\n".join(f"L{index:03d}: {_sanitize_prompt_text(line)}" for index, line in enumerate(text.splitlines(), start=1))
+    return _clip(numbered, max_chars)
+
+
 def _repo_tree(repo_path: Path) -> str:
     paths = []
     for path in sorted(repo_path.rglob("*")):
@@ -135,7 +146,7 @@ def _repo_context(repo_path: Path) -> str:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        chunks.append(f"FILE: {rel}\n{text}")
+        chunks.append(f"FILE: {rel}\n{_numbered_file_text(text)}")
     return _clip("\n\n".join(chunks), MAX_CONTEXT_CHARS)
 
 
@@ -190,7 +201,7 @@ def _localized_repo_context(repo_path: Path, results: list[SWEStageResult], issu
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        chunks.append(f"FILE: {rel}\n{text}")
+        chunks.append(f"FILE: {rel}\n{_numbered_file_text(text)}")
     return _clip("\n\n".join(chunks), MAX_LOCALIZED_CONTEXT_CHARS)
 
 
@@ -212,7 +223,7 @@ def messages_for_swe_stage(
     results: list[SWEStageResult],
     include_prior: bool = True,
 ) -> list[dict[str, str]]:
-    issue = _clip(task.problem_statement, MAX_ISSUE_CHARS)
+    issue = _clip(_sanitize_prompt_text(task.problem_statement), MAX_ISSUE_CHARS)
     if stage == "issue_analysis":
         context = _repo_tree_context(repo_path)
     else:
@@ -230,14 +241,15 @@ def messages_for_swe_stage(
         )
     elif stage == "patch_generation":
         user = (
-            "Return one-line JSON only: {\\\"edits\\\":[{\\\"file\\\":\\\"path.py\\\",\\\"find\\\":\\\"old\\\",\\\"replace\\\":\\\"new\\\"}]}. "
-            "Use exact copied find text from FILE. If unsure return {\\\"edits\\\":[]}.\n\n"
+            "Edit selected files. Return a JSON object only. The object has key edits. "
+            "Each edit has keys file, find, replace. The find value must be exact text copied from a FILE block. "
+            "If unsure, return an empty edits list. No markdown.\n\n"
             f"ISSUE:\n{issue}\n\n{context}\n\nPRIOR:\n{prior}"
         )
     elif stage == "test_repair":
         user = (
-            "Return final one-line edit JSON only. Keep or improve the prior edit. "
-            "If unsure return {\\\"edits\\\":[]}.\n\n"
+            "Review the prior edit. Return a JSON object only with key edits. "
+            "Keep or improve the edit. If unsure, return an empty edits list. No markdown.\n\n"
             f"ISSUE:\n{issue}\n\n{context}\n\nPRIOR:\n{prior}"
         )
     else:

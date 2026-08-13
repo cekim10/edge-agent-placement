@@ -68,6 +68,9 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs")
     parser.add_argument("--timeout-s", type=float, default=180.0)
     parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument("--cti-max-tokens", type=int, default=64)
+    parser.add_argument("--mitre-max-tokens", type=int, default=16)
+    parser.add_argument("--data-source-max-tokens", type=int, default=32)
     parser.add_argument("--kql-max-tokens", type=int, default=16)
     parser.add_argument("--rule-max-tokens", type=int, default=16)
     parser.add_argument("--mock", action="store_true")
@@ -103,6 +106,9 @@ def main() -> int:
         flush=True,
     )
     stage_max_tokens = {
+        "cti_analysis": args.cti_max_tokens,
+        "mitre_mapping": args.mitre_max_tokens,
+        "data_source_discovery": args.data_source_max_tokens,
         "kql_development": args.kql_max_tokens,
         "rule_generation": args.rule_max_tokens,
     }

@@ -94,8 +94,9 @@ python3 scripts/run_cti_observation1.py \
   --only-placement all_cloud \
   --timeout-s 300 \
   --max-tokens 64 \
-  --kql-max-tokens 16 \
-  --rule-max-tokens 16 \
+  --cti-max-tokens 64 \
+  --mitre-max-tokens 16 \
+  --data-source-max-tokens 32 \
   --proxy-final-from-c2
 ```
 
@@ -105,6 +106,9 @@ the all-cloud run produces non-zero MITRE/data-source hits.
 
 The recommended Phase-A quality run uses `--proxy-final-from-c2`: C0-C2 are
 model-generated, while C3/C4 are compact deterministic pass-through outputs.
+Short JSON stages should use stage-specific token caps such as
+`--mitre-max-tokens 16`; otherwise some vLLM/Qwen runs can stall despite small
+prompts.
 This avoids Qwen/vLLM stalls in long KQL/rule-generation completions while
 preserving the MITRE/data-source scoring signal needed for the first
 stage-sensitivity figure. The proxy finalizer does not read ground truth; it

@@ -119,3 +119,12 @@ The Option-B GitHub-repo workload is documented in
 ```bash
 python3 scripts/run_swe_testrepo_observation1.py --repo-path ~/test-repo --only-placement all_cloud
 ```
+
+## AppWorld Observation 1
+
+The preferred real-workflow pilot is documented in
+`docs/observation1_appworld.md`.
+
+```bash
+python3 scripts/run_appworld_observation1.py --mock --limit 2 --only-placement all_cloud
+```

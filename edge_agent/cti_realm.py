@@ -39,7 +39,7 @@ STAGE_LABELS = {
 }
 
 MAX_OBJECTIVE_CHARS = 1200
-MAX_CLASSIFIER_OBJECTIVE_CHARS = 700
+MAX_CLASSIFIER_OBJECTIVE_CHARS = 300
 MAX_PRIOR_CHARS = 800
 MAX_PRIOR_STAGE_CHARS = 220
 
@@ -185,6 +185,14 @@ def build_data_source_catalog(records: list[CTIRecord]) -> list[str]:
     return sorted(catalog, key=str.lower)
 
 
+def _compact_mitre_name(technique_id: str) -> str:
+    name = MITRE_TECHNIQUE_NAMES.get(technique_id)
+    if not name:
+        return technique_id
+    compact = re.sub(r"[^A-Za-z0-9]+", "", name)
+    return compact[:28]
+
+
 def build_mitre_catalog(records: list[CTIRecord]) -> list[str]:
     seen = set()
     catalog = []
@@ -194,8 +202,7 @@ def build_mitre_catalog(records: list[CTIRecord]) -> list[str]:
             if not key or key in seen:
                 continue
             seen.add(key)
-            name = MITRE_TECHNIQUE_NAMES.get(key)
-            catalog.append(f"{key}: {name}" if name else key)
+            catalog.append(f"{key}={_compact_mitre_name(key)}")
     return sorted(catalog)
 
 
@@ -290,12 +297,10 @@ def _messages_for_stage(
     if stage == "mitre_mapping":
         mitre_prior = f"\nPRIOR_STAGE_OUTPUTS:\n{prior}" if use_mitre_prior else ""
         user = (
-            "Select exactly one MITRE ATT&CK technique ID from AVAILABLE_MITRE_TECHNIQUES.\n"
-            "Use the technique names to distinguish behavior: credentials, secrets, tokens, certificates, "
-            "service accounts, passwords, and keys are credential-access behavior, not command execution.\n"
-            "Return minified JSON only, for example {\\\"mitre_techniques\\\":[\\\"T1552\\\"]}.\n\n"
+            "Choose one MITRE ID from the list. Secrets/tokens/certs/keys/service accounts imply credential access, not T1059.\n"
+            "JSON only: {\\\"mitre_techniques\\\":[\\\"T1552\\\"]}.\n\n"
             f"PLATFORM: {platform}\n"
-            f"DETECTION_OBJECTIVE:\n{classifier_objective}\n"
+            f"OBJECTIVE:\n{classifier_objective}\n"
             f"{mitre_block}"
             f"{mitre_prior}"
         )
@@ -304,10 +309,10 @@ def _messages_for_stage(
     if stage == "data_source_discovery":
         data_prior = f"\nPRIOR_STAGE_OUTPUTS:\n{prior}" if use_data_source_prior else ""
         user = (
-            "Select the exact telemetry source names from AVAILABLE_DATA_SOURCES.\n"
-            "Return minified JSON only, for example {\\\"data_sources\\\":[\\\"ExactSourceName\\\"]}.\n\n"
+            "Choose exact telemetry names from AVAILABLE_DATA_SOURCES.\n"
+            "JSON only: {\\\"data_sources\\\":[\\\"ExactSourceName\\\"]}.\n\n"
             f"PLATFORM: {platform}\n"
-            f"DETECTION_OBJECTIVE:\n{classifier_objective}\n"
+            f"OBJECTIVE:\n{classifier_objective}\n"
             f"{catalog_block}"
             f"{data_prior}"
         )

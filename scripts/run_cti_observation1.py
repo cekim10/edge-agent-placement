@@ -108,11 +108,20 @@ def main() -> int:
     all_records = load_cti_realm_records(data_dir, args.dataset_size, limit=0)
     data_source_catalog = build_data_source_catalog(all_records)
     mitre_catalog = build_mitre_catalog(all_records)
+    platforms = sorted({record.platform for record in all_records})
+    mitre_catalog_by_platform = {
+        platform: build_mitre_catalog([record for record in all_records if record.platform == platform])
+        for platform in platforms
+    }
+    platform_mitre_sizes = ",".join(
+        f"{platform}:{len(catalog)}" for platform, catalog in sorted(mitre_catalog_by_platform.items())
+    )
     records = all_records[: args.limit] if args.limit else all_records
     print(
         f"Loaded {len(records)} records; "
         f"data_source_catalog_size={len(data_source_catalog)} "
-        f"mitre_catalog_size={len(mitre_catalog)}",
+        f"mitre_catalog_size={len(mitre_catalog)} "
+        f"platform_mitre_catalog_sizes={platform_mitre_sizes}",
         flush=True,
     )
     stage_max_tokens = {
@@ -149,7 +158,7 @@ def main() -> int:
                     placement=placement,
                     proxy_final_from_c2=args.proxy_final_from_c2,
                     data_source_catalog=data_source_catalog,
-                    mitre_catalog=mitre_catalog,
+                    mitre_catalog=mitre_catalog_by_platform.get(record.platform, mitre_catalog),
                     use_mitre_prior=args.mitre_use_prior,
                     use_data_source_prior=args.data_source_use_prior,
                 )

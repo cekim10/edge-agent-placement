@@ -39,6 +39,7 @@ STAGE_LABELS = {
 }
 
 MAX_OBJECTIVE_CHARS = 1200
+MAX_CLASSIFIER_OBJECTIVE_CHARS = 700
 MAX_PRIOR_CHARS = 800
 MAX_PRIOR_STAGE_CHARS = 220
 
@@ -247,6 +248,7 @@ def _messages_for_stage(
     use_data_source_prior: bool = False,
 ) -> list[dict[str, str]]:
     objective = _clip(record.detection_objective, MAX_OBJECTIVE_CHARS)
+    classifier_objective = _clip(record.detection_objective, MAX_CLASSIFIER_OBJECTIVE_CHARS)
     platform = record.platform
     prior = _prior_block(stage_outputs)
     catalog = ", ".join(data_source_catalog or [])
@@ -293,7 +295,7 @@ def _messages_for_stage(
             "service accounts, passwords, and keys are credential-access behavior, not command execution.\n"
             "Return minified JSON only, for example {\\\"mitre_techniques\\\":[\\\"T1552\\\"]}.\n\n"
             f"PLATFORM: {platform}\n"
-            f"DETECTION_OBJECTIVE:\n{objective}\n"
+            f"DETECTION_OBJECTIVE:\n{classifier_objective}\n"
             f"{mitre_block}"
             f"{mitre_prior}"
         )
@@ -305,7 +307,7 @@ def _messages_for_stage(
             "Select the exact telemetry source names from AVAILABLE_DATA_SOURCES.\n"
             "Return minified JSON only, for example {\\\"data_sources\\\":[\\\"ExactSourceName\\\"]}.\n\n"
             f"PLATFORM: {platform}\n"
-            f"DETECTION_OBJECTIVE:\n{objective}\n"
+            f"DETECTION_OBJECTIVE:\n{classifier_objective}\n"
             f"{catalog_block}"
             f"{data_prior}"
         )

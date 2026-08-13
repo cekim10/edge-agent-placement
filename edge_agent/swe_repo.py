@@ -138,6 +138,15 @@ def _issue_code_lines(issue: str) -> list[str]:
     return lines[:6]
 
 
+def _issue_symbols(issue: str) -> list[str]:
+    symbols = []
+    for imported in re.findall(r"\bfrom\s+[A-Za-z_][A-Za-z0-9_.]*\s+import\s+([A-Za-z0-9_,\s]+)", issue):
+        symbols.extend(item.strip() for item in imported.split(","))
+    symbols.extend(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", issue))
+    ignore = {"assert", "print", "return", "if", "for", "while", "with"}
+    return list(dict.fromkeys(symbol for symbol in symbols if symbol and symbol not in ignore))
+
+
 def _issue_traceback_files(issue: str, repo_path: Path) -> list[str]:
     candidates = []
     for match in re.findall(r'File\s+"([^"]+\.py)"', issue):
@@ -164,7 +173,7 @@ def _issue_import_files(issue: str, repo_path: Path) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
-def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 900) -> str:
+def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 1200) -> str:
     lines = text.splitlines()
     selected: set[int] = set()
     for line_no in _issue_line_numbers(issue):
@@ -174,6 +183,12 @@ def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: in
         for index, line in enumerate(lines, start=1):
             if needle in _sanitize_prompt_text(line):
                 for near in range(max(1, index - radius), min(len(lines), index + radius) + 1):
+                    selected.add(near)
+    for symbol in _issue_symbols(issue):
+        pattern = re.compile(rf"^\s*(def|class)\s+{re.escape(symbol)}\b")
+        for index, line in enumerate(lines, start=1):
+            if pattern.search(_sanitize_prompt_text(line)):
+                for near in range(max(1, index - 1), min(len(lines), index + 18) + 1):
                     selected.add(near)
     if not selected:
         selected = set(range(1, min(len(lines), 8) + 1))
@@ -304,6 +319,7 @@ def messages_for_swe_stage(
             "Return a JSON object only with key edits. Prefer edits with keys file, line, new. "
             "Use the L001 number as line. The new value is the full replacement line without the L001 prefix. "
             "Alternatively use file, find, replace with real code text and no L001 prefixes. "
+            "Make the smallest edit possible; do not rewrite whole files or docstrings. "
             "If unsure return an empty edits list.\n\n"
             f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
@@ -313,6 +329,7 @@ def messages_for_swe_stage(
             "Return a JSON object only with key edits. Prefer edits with keys file, line, new. "
             "Use the L001 number as line. The new value is the full replacement line without the L001 prefix. "
             "Alternatively use file, find, replace with real code text and no L001 prefixes. Keep or improve the prior edit. "
+            "Make the smallest edit possible; do not rewrite whole files or docstrings. "
             "If unsure return an empty edits list.\n\n"
             f"ISSUE:\n{issue}\n\n{context}{prior_text}"
         )
@@ -371,6 +388,30 @@ def _strip_prompt_line_numbers(text: str) -> str:
     return "\n".join(re.sub(r"^L\d{3}:\s?", "", line) for line in text.splitlines())
 
 
+def _line_signature(text: str) -> str:
+    text = _strip_prompt_line_numbers(text).strip()
+    text = text[:-1].rstrip() if text.endswith(":") else text
+    return re.sub(r"\s+", " ", text)
+
+
+def _replacement_index(lines: list[str], requested_index: int, new_first_line: str) -> int | None:
+    if 0 <= requested_index < len(lines):
+        requested = _line_signature(lines[requested_index])
+        replacement = _line_signature(new_first_line)
+        if requested == replacement or requested in replacement or replacement in requested:
+            return requested_index
+    replacement = _line_signature(new_first_line)
+    for index, line in enumerate(lines):
+        if _line_signature(line) == replacement:
+            return index
+    return requested_index if 0 <= requested_index < len(lines) else None
+
+
+def _preserve_first_line_indent(old_line: str, new_line: str) -> str:
+    old_indent = re.match(r"\s*", old_line).group(0)
+    return old_indent + new_line.strip()
+
+
 def _edit_plan_to_diff(repo_path: Path, text: str) -> str:
     parsed = _extract_json_object(text)
     edits = parsed.get("edits", [])
@@ -398,10 +439,19 @@ def _edit_plan_to_diff(repo_path: Path, text: str) -> str:
             line_number = int(line_match.group(0)) if line_match else line_number
         if isinstance(line_number, int) and isinstance(new_line, str):
             current_lines = current.splitlines(keepends=True)
-            if 1 <= line_number <= len(current_lines):
-                old_line = current_lines[line_number - 1]
+            new_lines = _strip_prompt_line_numbers(new_line).splitlines()
+            if not new_lines:
+                continue
+            replacement_at = _replacement_index(current_lines, line_number - 1, new_lines[0])
+            if replacement_at is not None:
+                old_line = current_lines[replacement_at]
                 ending = "\n" if old_line.endswith("\n") else ""
-                current_lines[line_number - 1] = _strip_prompt_line_numbers(new_line).rstrip("\n") + ending
+                new_lines[0] = _preserve_first_line_indent(old_line, new_lines[0])
+                replacement = [line.rstrip("\n") + "\n" for line in new_lines]
+                if replacement:
+                    replacement[-1] = replacement[-1].rstrip("\n") + ending
+                span = max(1, len(new_lines))
+                current_lines[replacement_at : replacement_at + span] = replacement
                 updated_by_file[rel] = "".join(current_lines)
                 continue
 

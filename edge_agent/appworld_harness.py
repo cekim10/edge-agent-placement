@@ -22,10 +22,10 @@ APPWORLD_STAGES = ("task_analysis", "api_doc_lookup", "code_generation", "execut
 
 MAX_INSTRUCTION_CHARS = 650
 MAX_APP_DESCRIPTIONS_CHARS = 520
-MAX_STAGE_OUTPUT_CHARS = 900
+MAX_STAGE_OUTPUT_CHARS = 520
 MAX_EXECUTION_OUTPUT_CHARS = 1000
 MAX_EVALUATION_CHARS = 1000
-MAX_API_DOCS_CHARS = 420
+MAX_API_DOCS_CHARS = 160
 
 
 @dataclass(frozen=True)
@@ -196,12 +196,17 @@ def _doc_lookup_code(selected_apps: list[str]) -> str:
     return "\n".join(lines)
 
 
-def _compact_prior(results: list[AppWorldStageResult]) -> str:
+def _compact_prior(
+    results: list[AppWorldStageResult],
+    *,
+    doc_chars: int = 220,
+    max_chars: int = MAX_STAGE_OUTPUT_CHARS,
+) -> str:
     compact: list[dict[str, Any]] = []
     for result in results:
         parsed = _json_loads_loose(result.output)
         if result.stage in {"api_doc_lookup", "api_doc_output"}:
-            compact.append({"stage": result.stage, "output": _clip(result.output, 700)})
+            compact.append({"stage": result.stage, "output": _clip(result.output, doc_chars)})
         elif isinstance(parsed, dict):
             item = {
                 key: parsed[key]
@@ -211,7 +216,7 @@ def _compact_prior(results: list[AppWorldStageResult]) -> str:
             compact.append({"stage": result.stage, **item})
         else:
             compact.append({"stage": result.stage, "output": _clip(result.output, 160)})
-    return _clip(compact, MAX_STAGE_OUTPUT_CHARS)
+    return _clip(compact, max_chars)
 
 
 def _api_docs_preview(task: Any, selected_apps: list[str]) -> str:
@@ -315,10 +320,9 @@ def messages_for_appworld_stage(
 
     system = "You are a deterministic AppWorld agent."
     appworld_rules = (
-        "Rules: use preloaded apis only; no imports or external clients. "
-        "Use apis.api_docs.show_api_doc(app, api) if unsure. "
-        "For private apps, get credentials with apis.supervisor.show_account_passwords(), then login. "
-        "For answer tasks call apis.supervisor.complete_task(answer=...)."
+        "Rules: no imports; use preloaded apis only. "
+        "For private apps get passwords, login, then call APIs. "
+        "Always finish with apis.supervisor.complete_task(answer=...)."
     )
     if stage == "task_analysis":
         user = (
@@ -332,18 +336,18 @@ def messages_for_appworld_stage(
             f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}\n\nRELEVANT_APPS:\n{selected_apps_text}"
         )
     elif stage == "code_generation":
+        code_prior = _compact_prior(results, doc_chars=240, max_chars=360)
         user = (
-            f"{appworld_rules} Do not write import statements. "
-            "Use the API names shown in PLAN/API_DOCS. Always call apis.supervisor.complete_task(...); "
-            "for answer tasks pass answer as a comma-separated string. Return Python code only.\n\n"
-            f"TASK:\n{_clip(instruction, 320)}\n\nAPPS:\n{selected_apps_text}\n\nAPI_DOCS:\n{api_docs}\n\nPLAN_AND_DOC_OUTPUT:\n{_clip(prior, 760)}"
+            f"{appworld_rules} Return Python code only.\n\n"
+            f"TASK:\n{_clip(instruction, 260)}\n\nAPPS:\n{selected_apps_text}\n\nDOCS:\n{api_docs}\n\nPRIOR:\n{code_prior}"
         )
     elif stage == "execution_verification":
+        verify_prior = _compact_prior(results, doc_chars=120, max_chars=220)
         user = (
-            f"{appworld_rules} Do not write import statements. "
+            f"{appworld_rules} "
             "If complete_task was not called or execution failed, return corrected Python code only. "
             "If already successful, return empty text.\n\n"
-            f"TASK:\n{_clip(instruction, 420)}\n\nLAST_EXECUTION:\n{_clip(exec_text, 420)}\n\nEVALUATION:\n{_clip(eval_text, 360)}\n\nPLAN:\n{_clip(prior, 160)}"
+            f"TASK:\n{_clip(instruction, 320)}\n\nLAST_EXECUTION:\n{_clip(exec_text, 360)}\n\nEVALUATION:\n{_clip(eval_text, 260)}\n\nPRIOR:\n{verify_prior}"
         )
     else:
         raise ValueError(f"unknown AppWorld stage: {stage}")

@@ -128,3 +128,12 @@ The preferred real-workflow pilot is documented in
 ```bash
 python3 scripts/run_appworld_observation1.py --mock --limit 2 --only-placement all_cloud
 ```
+
+## ScienceWorld Observation 1
+
+The text-environment stage-sensitivity workload is documented in
+`docs/observation1_scienceworld.md`.
+
+```bash
+python3 scripts/run_scienceworld_observation1.py --mock --limit 2 --only-placement all_cloud
+```

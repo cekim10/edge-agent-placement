@@ -178,8 +178,6 @@ def _doc_lookup_code(selected_apps: list[str]) -> str:
         "        print('\\n## ' + label + ' ERROR')",
         "        print(type(exc).__name__ + ': ' + str(exc))",
         "",
-        "show('supervisor account passwords', lambda: apis.supervisor.show_account_passwords())",
-        "show('supervisor complete_task doc', lambda: apis.api_docs.show_api_doc('supervisor', 'complete_task'))",
     ]
     for app_name in apps[:3]:
         lines.extend(
@@ -193,7 +191,40 @@ def _doc_lookup_code(selected_apps: list[str]) -> str:
             lines.append(
                 f"show('{app_name} {api_name} doc', lambda: apis.api_docs.show_api_doc('{app_name}', '{api_name}'))"
             )
+    lines.extend(
+        [
+            "show('supervisor complete_task doc', lambda: apis.api_docs.show_api_doc('supervisor', 'complete_task'))",
+            "show('supervisor account passwords', lambda: apis.supervisor.show_account_passwords())",
+        ]
+    )
     return "\n".join(lines)
+
+
+def _compact_doc_output(text: str, max_chars: int) -> str:
+    keywords = (
+        "available API names",
+        "api descriptions",
+        "login doc",
+        "complete_task",
+        "account passwords",
+        "access_token",
+        "song",
+        "track",
+        "playlist",
+        "genre",
+        "played",
+    )
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        if any(keyword.lower() in lowered for keyword in keywords):
+            kept.append(stripped)
+    if not kept:
+        kept = [line.strip() for line in text.splitlines() if line.strip()]
+    return _clip("\n".join(kept), max_chars)
 
 
 def _compact_prior(
@@ -205,8 +236,10 @@ def _compact_prior(
     compact: list[dict[str, Any]] = []
     for result in results:
         parsed = _json_loads_loose(result.output)
-        if result.stage in {"api_doc_lookup", "api_doc_output"}:
-            compact.append({"stage": result.stage, "output": _clip(result.output, doc_chars)})
+        if result.stage == "api_doc_lookup":
+            continue
+        if result.stage == "api_doc_output":
+            compact.append({"stage": result.stage, "output": _compact_doc_output(result.output, doc_chars)})
         elif isinstance(parsed, dict):
             item = {
                 key: parsed[key]

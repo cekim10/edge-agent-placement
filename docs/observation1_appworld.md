@@ -102,6 +102,14 @@ all-cloud success_rate < 0.80: do not run placement variants
 all-cloud success_rate >= 0.80: run stage sensitivity
 ```
 
+Inspect failures before changing models:
+
+```bash
+python3 scripts/inspect_appworld_run.py \
+  outputs/appworld_observation1_<timestamp> \
+  --label all_cloud
+```
+
 ## Stage Sensitivity
 
 ```bash

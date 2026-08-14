@@ -37,6 +37,7 @@ MAX_ACTION_STATE_CHARS = 90
 MAX_ACTION_PLAN_CHARS = 90
 MAX_VALID_ACTIONS = 8
 MAX_VALID_CHARS = 220
+REPEAT_ACTION_PENALTY = 10
 
 
 @dataclass(frozen=True)
@@ -198,15 +199,20 @@ def _short_history(steps: list[ScienceWorldStepResult]) -> str:
     return _clip("\n".join(lines) if lines else "none", MAX_HISTORY_CHARS)
 
 
-def _ranked_valid_actions(valid_actions: list[str], context: str = "") -> list[str]:
+def _ranked_valid_actions(
+    valid_actions: list[str],
+    context: str = "",
+    recent_actions: list[str] | None = None,
+) -> list[str]:
     context_words = {
         word
         for word in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", context.lower())
         if len(word) >= 4
     }
+    recent_set = {action.lower() for action in (recent_actions or [])}
+    context_lower = context.lower()
     preferred_prefixes = (
         "look",
-        "inventory",
         "examine",
         "focus",
         "open",
@@ -233,14 +239,27 @@ def _ranked_valid_actions(valid_actions: list[str], context: str = "") -> list[s
             score += 4
         if any(word in lowered for word in context_words):
             score += 3
-        if lowered in {"look around", "inventory"}:
+        if lowered == "look around":
             score += 5
+        if lowered == "inventory":
+            score -= 2
+        if lowered in recent_set:
+            score -= REPEAT_ACTION_PENALTY
+        if "non-living" in context_lower:
+            if any(word in lowered for word in ("orange", "apple", "banana", "plant", "animal", "person", "air")):
+                score -= 6
+            if any(word in lowered for word in ("picture", "box", "table", "chair", "door", "book", "key", "metal", "wood")):
+                score += 6
         scored.append((-score, index, action))
     return [action for _score, _index, action in sorted(scored)[:MAX_VALID_ACTIONS]]
 
 
-def _valid_actions_text(valid_actions: list[str], context: str = "") -> str:
-    shown = _ranked_valid_actions(valid_actions, context)
+def _valid_actions_text(
+    valid_actions: list[str],
+    context: str = "",
+    recent_actions: list[str] | None = None,
+) -> str:
+    shown = _ranked_valid_actions(valid_actions, context, recent_actions)
     lines = [f"{index}. {action}" for index, action in enumerate(shown, start=1)]
     if len(valid_actions) > len(shown):
         lines.append(f"... {len(valid_actions) - len(shown)} more actions omitted")
@@ -365,6 +384,7 @@ def messages_for_scienceworld_stage(
     score = _info_score(info)
     valid = _valid_actions(info)
     history = _short_history(steps)
+    recent_actions = [step.action for step in steps[-3:]]
     system = "You are a deterministic ScienceWorld agent. Return exactly the requested JSON."
     common = (
         f"TASK:\n{_clip(task_description, MAX_TASK_CHARS)}\n\n"
@@ -403,7 +423,9 @@ def messages_for_scienceworld_stage(
             f"OBS: {_clip(observation, MAX_ACTION_OBS_CHARS)}\n"
             f"STATE: {state}\n"
             f"PLAN: {plan}\n"
-            f"ACTIONS:\n{_valid_actions_text(valid, action_context)}"
+            f"RECENT_ACTIONS: {', '.join(recent_actions) if recent_actions else 'none'}\n"
+            "Avoid repeating an action unless score increased last time.\n"
+            f"ACTIONS:\n{_valid_actions_text(valid, action_context, recent_actions)}"
         )
     elif stage == "progress_verification":
         action = _clip(steps[-1].action if steps else "", 120)
@@ -421,8 +443,13 @@ def messages_for_scienceworld_stage(
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _select_action(output: str, valid_actions: list[str], context: str = "") -> tuple[str, bool]:
-    ranked_actions = _ranked_valid_actions(valid_actions, context)
+def _select_action(
+    output: str,
+    valid_actions: list[str],
+    context: str = "",
+    recent_actions: list[str] | None = None,
+) -> tuple[str, bool]:
+    ranked_actions = _ranked_valid_actions(valid_actions, context, recent_actions)
     parsed = _json_loads_loose(output)
     action = ""
     if isinstance(parsed, dict):
@@ -562,7 +589,8 @@ def run_scienceworld_workflow(
                 f"{_latest_stage_output(step_stage_results, 'state_abstraction')}\n"
                 f"{_latest_stage_output(step_stage_results, 'subgoal_planning')}"
             )
-            action, invalid = _select_action(action_output, valid_actions, action_context)
+            recent_actions = [step.action for step in steps[-3:]]
+            action, invalid = _select_action(action_output, valid_actions, action_context, recent_actions)
             next_observation, reward, done, next_info = env.step(action)
             next_info = dict(next_info or {})
             final_score = _info_score(next_info)

@@ -44,6 +44,7 @@ class ChatClient(Protocol):
         stage: str,
         messages: list[dict[str, str]],
         incident: dict[str, Any] | None = None,
+        guided_json: dict[str, Any] | None = None,
     ) -> str:
         ...
 
@@ -93,33 +94,40 @@ class VLLMClient:
         endpoint: Endpoint,
         messages: list[dict[str, str]],
         request_max_tokens: int,
+        guided_json: dict[str, Any] | None,
     ) -> tuple[str, dict[str, Any], int | None]:
         api_kind = endpoint.api_kind.strip().lower()
         if api_kind in {"chat", "chat_completions", "chat/completions"}:
+            payload = {
+                "model": endpoint.model,
+                "messages": messages,
+                "temperature": self.temperature,
+                "top_p": 1.0,
+                "max_tokens": request_max_tokens,
+            }
+            if guided_json is not None:
+                payload["guided_json"] = guided_json
             return (
                 endpoint.base_url.rstrip("/") + "/chat/completions",
-                {
-                    "model": endpoint.model,
-                    "messages": messages,
-                    "temperature": self.temperature,
-                    "top_p": 1.0,
-                    "max_tokens": request_max_tokens,
-                },
+                payload,
                 None,
             )
         if api_kind in {"completion", "completions", "text"}:
             prompt = self._prompt_from_messages(endpoint, messages)
             tokenizer = self._tokenizer_for_model(endpoint.model)
             prompt_tokens = len(tokenizer(prompt, add_special_tokens=False).input_ids)
+            payload = {
+                "model": endpoint.model,
+                "prompt": prompt,
+                "temperature": self.temperature,
+                "top_p": 1.0,
+                "max_tokens": request_max_tokens,
+            }
+            if guided_json is not None:
+                payload["guided_json"] = guided_json
             return (
                 endpoint.base_url.rstrip("/") + "/completions",
-                {
-                    "model": endpoint.model,
-                    "prompt": prompt,
-                    "temperature": self.temperature,
-                    "top_p": 1.0,
-                    "max_tokens": request_max_tokens,
-                },
+                payload,
                 prompt_tokens,
             )
         raise ValueError(f"Unsupported api_kind for {endpoint.tier}: {endpoint.api_kind!r}")
@@ -131,6 +139,7 @@ class VLLMClient:
         stage: str,
         messages: list[dict[str, str]],
         incident: dict[str, Any] | None = None,
+        guided_json: dict[str, Any] | None = None,
     ) -> str:
         del incident
         endpoint = self.endpoints[tier]
@@ -139,6 +148,7 @@ class VLLMClient:
             endpoint=endpoint,
             messages=messages,
             request_max_tokens=request_max_tokens,
+            guided_json=guided_json,
         )
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
@@ -189,8 +199,9 @@ class MockClient:
         stage: str,
         messages: list[dict[str, str]],
         incident: dict[str, Any] | None = None,
+        guided_json: dict[str, Any] | None = None,
     ) -> str:
-        del messages
+        del messages, guided_json
         if incident is None:
             raise ValueError("MockClient requires incident metadata")
         expected = incident["expected"]

@@ -452,12 +452,27 @@ def _replacement_index(lines: list[str], requested_index: int, new_first_line: s
         requested = _line_signature(lines[requested_index])
         if requested == replacement:
             return requested_index
-        if len(replacement) >= 8 and (requested in replacement or replacement in requested):
+        if requested and len(replacement) >= 8 and (requested in replacement or replacement in requested):
             return requested_index
     for index, line in enumerate(lines):
-        if _line_signature(line) == replacement:
+        signature = _line_signature(line)
+        if signature and signature == replacement:
             return index
     return None
+
+
+def _line_is_compatible_replacement(old_line: str, new_line: str) -> bool:
+    old_sig = _line_signature(old_line)
+    new_sig = _line_signature(new_line)
+    if not old_sig:
+        return False
+    if old_sig == new_sig:
+        return True
+    if len(new_sig) >= 8 and (old_sig in new_sig or new_sig in old_sig):
+        return True
+    old_head = old_sig.split(" ", 1)[0] if old_sig else ""
+    new_head = new_sig.split(" ", 1)[0] if new_sig else ""
+    return old_head == new_head and old_head in {"def", "class", "return", "if", "elif", "else", "for", "while"}
 
 
 def _preserve_first_line_indent(old_line: str, new_line: str) -> str:
@@ -500,12 +515,16 @@ def _edit_plan_to_diff(repo_path: Path, text: str) -> str:
             new_lines = _strip_prompt_line_numbers(new_line).splitlines()
             if not new_lines:
                 continue
-            if 1 <= line_number <= len(current_lines):
-                replacement_at = line_number - 1
+            requested_at = line_number - 1 if 1 <= line_number <= len(current_lines) else None
+            matched_at = _replacement_index(current_lines, line_number - 1, new_lines[0])
+            if requested_at is not None and _line_is_compatible_replacement(current_lines[requested_at], new_lines[0]):
+                replacement_at = requested_at
+            elif matched_at is not None:
+                replacement_at = matched_at
+            elif requested_at is not None:
+                replacement_at = requested_at
             else:
-                replacement_at = _replacement_index(current_lines, line_number - 1, new_lines[0])
-                if replacement_at is None:
-                    continue
+                continue
             old_line = current_lines[replacement_at]
             ending = "\n" if old_line.endswith("\n") else ""
             new_lines[0] = _preserve_first_line_indent(old_line, new_lines[0])

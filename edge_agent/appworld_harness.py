@@ -191,7 +191,7 @@ def _doc_lookup_code(selected_apps: list[str]) -> str:
         "        print('\\n## ' + label + ' ERROR')",
         "        print(type(exc).__name__ + ': ' + str(exc))",
         "",
-        "show('supervisor complete_task doc', lambda: apis.api_docs.show_api_doc('supervisor', 'complete_task'))",
+        "show('supervisor complete_task doc', lambda: apis.api_docs.show_api_doc(app_name='supervisor', api_name='complete_task'))",
         "show('supervisor account passwords', lambda: apis.supervisor.show_account_passwords())",
     ]
     for app_name in apps[:3]:
@@ -208,7 +208,7 @@ def _doc_lookup_code(selected_apps: list[str]) -> str:
             "show_playlist",
         ):
             lines.append(
-                f"show('{app_name} {api_name} doc', lambda: apis.api_docs.show_api_doc('{app_name}', '{api_name}'))"
+                f"show('{app_name} {api_name} doc', lambda: apis.api_docs.show_api_doc(app_name='{app_name}', api_name='{api_name}'))"
             )
         lines.append(f"show('{app_name} available API names', lambda: [name for name in dir(apis.{app_name}) if not name.startswith('_')])")
     return "\n".join(lines)
@@ -252,6 +252,41 @@ def _compact_doc_output(text: str, max_chars: int) -> str:
                         for line in body_lines
                         if any(name in line for name in ("login", "show_song", "search_songs", "show_genres", "show_playlist"))
                     ][:8]
+                elif "account passwords" in label.lower():
+                    try:
+                        parsed = json.loads("\n".join(body_lines))
+                    except json.JSONDecodeError:
+                        parsed = None
+                    if isinstance(parsed, list):
+                        body_lines = [
+                            json.dumps(item, ensure_ascii=False)
+                            for item in parsed
+                            if isinstance(item, dict) and item.get("account_name") == "spotify"
+                        ] or body_lines[:3]
+                elif " doc" in label.lower():
+                    try:
+                        parsed_doc = json.loads("\n".join(body_lines))
+                    except json.JSONDecodeError:
+                        parsed_doc = None
+                    if isinstance(parsed_doc, dict):
+                        params = parsed_doc.get("parameters", [])
+                        param_names = [
+                            str(param.get("name"))
+                            for param in params
+                            if isinstance(param, dict) and param.get("name")
+                        ]
+                        response = parsed_doc.get("response_schema", parsed_doc.get("response_schemas", {}))
+                        if isinstance(response, dict):
+                            response_keys = list(response)[:8]
+                        elif isinstance(response, list) and response and isinstance(response[0], dict):
+                            response_keys = list(response[0])[:8]
+                        else:
+                            response_keys = []
+                        body_lines = [
+                            "desc: " + str(parsed_doc.get("description", ""))[:90],
+                            "params: " + ", ".join(param_names),
+                            "returns: " + ", ".join(str(key) for key in response_keys),
+                        ]
                 else:
                     body_lines = body_lines[:3]
                 kept.append("## " + label)
@@ -263,6 +298,13 @@ def _compact_doc_output(text: str, max_chars: int) -> str:
     if not kept:
         kept = [line.strip() for line in text.splitlines() if line.strip()]
     return _clip("\n".join(kept), max_chars)
+
+
+def _latest_stage_output(results: list[AppWorldStageResult], stage: str) -> str:
+    for result in reversed(results):
+        if result.stage == stage:
+            return result.output
+    return ""
 
 
 def _compact_prior(
@@ -387,7 +429,7 @@ def messages_for_appworld_stage(
     exec_text = _clip(execution_outputs[-1]["output"], MAX_EXECUTION_OUTPUT_CHARS) if execution_outputs else ""
     eval_text = _clip(evaluation or {}, MAX_EVALUATION_CHARS) if evaluation else ""
     api_docs = _clip(task_info.api_docs_preview, MAX_API_DOCS_CHARS)
-    supervisor = _clip(task_info.supervisor, 320)
+    user_email = str(task_info.supervisor.get("email", ""))
 
     system = "You are a deterministic AppWorld agent."
     appworld_rules = (
@@ -407,15 +449,16 @@ def messages_for_appworld_stage(
             f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}\n\nRELEVANT_APPS:\n{selected_apps_text}"
         )
     elif stage == "code_generation":
-        code_prior = _compact_prior(results, doc_chars=260, max_chars=360)
+        doc_summary = _compact_doc_output(_latest_stage_output(results, "api_doc_output"), 560)
         spotify_hint = ""
         if "spotify" in selected_apps:
             spotify_hint = (
-                "\nSpotify: login, use song/library/private APIs from PRIOR, sort/filter titles, complete_task."
+                "\nSpotify: use USER_EMAIL plus spotify password from APIS to login. "
+                "Use documented song APIs only; sort/filter titles; complete_task."
             )
         user = (
             f"{appworld_rules} Max 18 lines. Python code only.\n\n"
-            f"TASK:\n{_clip(instruction, 220)}\n\nAPPS:\n{selected_apps_text}{spotify_hint}\n\nPRIOR:\n{code_prior}"
+            f"TASK:\n{_clip(instruction, 220)}\n\nUSER_EMAIL:\n{user_email}\n\nAPPS:\n{selected_apps_text}{spotify_hint}\n\nAPIS:\n{doc_summary}"
         )
     elif stage == "execution_verification":
         verify_prior = _compact_prior(results, doc_chars=120, max_chars=220)

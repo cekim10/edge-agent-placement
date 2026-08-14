@@ -134,6 +134,11 @@ def _sanitize_appworld_code(code: str, apps: list[str]) -> str:
     sanitized = "\n".join(sanitized_lines)
     for app_name in apps:
         sanitized = re.sub(rf"(?<![\w.]){re.escape(app_name)}\.", f"apis.{app_name}.", sanitized)
+    sanitized = sanitized.replace("apis.supervisor.account_passwords", "apis.supervisor.show_account_passwords")
+    sanitized = sanitized.replace("login_result.access_token", "login_result['access_token']")
+    sanitized = sanitized.replace("login_response.access_token", "login_response['access_token']")
+    sanitized = sanitized.replace("login_result.success", "login_result")
+    sanitized = sanitized.replace("login_response.success", "login_response")
     return sanitized.strip()
 
 
@@ -449,24 +454,27 @@ def messages_for_appworld_stage(
             f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}\n\nRELEVANT_APPS:\n{selected_apps_text}"
         )
     elif stage == "code_generation":
-        doc_summary = _compact_doc_output(_latest_stage_output(results, "api_doc_output"), 560)
+        doc_summary = _compact_doc_output(_latest_stage_output(results, "api_doc_output"), 500)
         spotify_hint = ""
         if "spotify" in selected_apps:
+            user_email_literal = json.dumps(user_email)
             spotify_hint = (
-                "\nSpotify: use USER_EMAIL plus spotify password from APIS to login. "
-                "Use documented song APIs only; sort/filter titles; complete_task."
+                "\nSpotify exact login:\n"
+                "pw=next(x['password'] for x in apis.supervisor.show_account_passwords() if x['account_name']=='spotify')\n"
+                f"tok=apis.spotify.login(username={user_email_literal},password=pw)['access_token']\n"
+                "Use only documented song APIs; complete_task."
             )
         user = (
-            f"{appworld_rules} Max 18 lines. Python code only.\n\n"
+            f"{appworld_rules} Max 16 lines. Python code only.\n\n"
             f"TASK:\n{_clip(instruction, 220)}\n\nUSER_EMAIL:\n{user_email}\n\nAPPS:\n{selected_apps_text}{spotify_hint}\n\nAPIS:\n{doc_summary}"
         )
     elif stage == "execution_verification":
-        verify_prior = _compact_prior(results, doc_chars=120, max_chars=220)
+        verify_doc = _compact_doc_output(_latest_stage_output(results, "api_doc_output"), 260)
         user = (
             f"{appworld_rules} "
             "If complete_task was not called or execution failed, return corrected Python code only. "
             "If already successful, return empty text.\n\n"
-            f"TASK:\n{_clip(instruction, 320)}\n\nLAST_EXECUTION:\n{_clip(exec_text, 360)}\n\nEVALUATION:\n{_clip(eval_text, 260)}\n\nPRIOR:\n{verify_prior}"
+            f"TASK:\n{_clip(instruction, 260)}\n\nUSER_EMAIL:\n{user_email}\n\nLAST_EXECUTION:\n{_clip(exec_text, 280)}\n\nAPIS:\n{verify_doc}"
         )
     else:
         raise ValueError(f"unknown AppWorld stage: {stage}")

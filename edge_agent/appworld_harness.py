@@ -253,7 +253,7 @@ def _compact_doc_output(text: str, max_chars: int) -> str:
                         if any(name in line for name in ("login", "show_song", "search_songs", "show_genres", "show_playlist"))
                     ][:8]
                 else:
-                    body_lines = body_lines[:10]
+                    body_lines = body_lines[:3]
                 kept.append("## " + label)
                 kept.extend(body_lines)
                 break
@@ -391,10 +391,9 @@ def messages_for_appworld_stage(
 
     system = "You are a deterministic AppWorld agent."
     appworld_rules = (
-        "Rules: no imports; use preloaded apis only. "
-        "Call APIs exactly as apis.<app>.<api>(...). Never use bare spotify or external clients. "
-        "Do not invent get_top_tracks/current_user/recently_played APIs. "
-        "Always finish with apis.supervisor.complete_task(answer=...)."
+        "Use only apis.<app>.<api>(...). No imports. "
+        "Never use bare spotify or fake top/recent APIs. "
+        "End with apis.supervisor.complete_task(answer=...)."
     )
     if stage == "task_analysis":
         user = (
@@ -408,16 +407,15 @@ def messages_for_appworld_stage(
             f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}\n\nRELEVANT_APPS:\n{selected_apps_text}"
         )
     elif stage == "code_generation":
-        code_prior = _compact_prior(results, doc_chars=520, max_chars=680)
+        code_prior = _compact_prior(results, doc_chars=260, max_chars=360)
         spotify_hint = ""
         if "spotify" in selected_apps:
             spotify_hint = (
-                "\nFor Spotify answer tasks: get passwords, login, read song/library/private APIs from DOCS, "
-                "sort/filter in Python, then complete_task(answer=', '.join(titles))."
+                "\nSpotify: login, use song/library/private APIs from PRIOR, sort/filter titles, complete_task."
             )
         user = (
-            f"{appworld_rules} No comments. Max 20 lines. Return Python code only.\n\n"
-            f"TASK:\n{_clip(instruction, 260)}\n\nAPPS:\n{selected_apps_text}{spotify_hint}\n\nDOCS:\n{api_docs}\n\nPRIOR:\n{code_prior}"
+            f"{appworld_rules} Max 18 lines. Python code only.\n\n"
+            f"TASK:\n{_clip(instruction, 220)}\n\nAPPS:\n{selected_apps_text}{spotify_hint}\n\nPRIOR:\n{code_prior}"
         )
     elif stage == "execution_verification":
         verify_prior = _compact_prior(results, doc_chars=120, max_chars=220)

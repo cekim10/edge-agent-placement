@@ -23,11 +23,14 @@ SCIENCEWORLD_STAGES = (
     "progress_verification",
 )
 
-MAX_TASK_CHARS = 420
-MAX_OBS_CHARS = 650
-MAX_HISTORY_CHARS = 700
-MAX_STATE_CHARS = 420
-MAX_PLAN_CHARS = 420
+MAX_TASK_CHARS = 240
+MAX_OBS_CHARS = 360
+MAX_HISTORY_CHARS = 260
+MAX_STATE_CHARS = 220
+MAX_PLAN_CHARS = 220
+MAX_VERIFY_TASK_CHARS = 160
+MAX_VERIFY_OBS_CHARS = 260
+MAX_VERIFY_HISTORY_CHARS = 180
 MAX_ACTION_TASK_CHARS = 160
 MAX_ACTION_OBS_CHARS = 260
 MAX_ACTION_STATE_CHARS = 180
@@ -187,15 +190,15 @@ def _valid_actions(info: dict[str, Any]) -> list[str]:
 
 def _short_history(steps: list[ScienceWorldStepResult]) -> str:
     lines = []
-    for step in steps[-4:]:
+    for step in steps[-3:]:
         lines.append(
             f"{step.step_index}. action={step.action!r} score={step.score:.1f} "
-            f"obs={_clip(step.observation, 150)}"
+            f"obs={_clip(step.observation, 80)}"
         )
     return _clip("\n".join(lines) if lines else "none", MAX_HISTORY_CHARS)
 
 
-def _valid_actions_text(valid_actions: list[str], context: str = "") -> str:
+def _ranked_valid_actions(valid_actions: list[str], context: str = "") -> list[str]:
     context_words = {
         word
         for word in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", context.lower())
@@ -233,7 +236,11 @@ def _valid_actions_text(valid_actions: list[str], context: str = "") -> str:
         if lowered in {"look around", "inventory"}:
             score += 5
         scored.append((-score, index, action))
-    shown = [action for _score, _index, action in sorted(scored)[:MAX_VALID_ACTIONS]]
+    return [action for _score, _index, action in sorted(scored)[:MAX_VALID_ACTIONS]]
+
+
+def _valid_actions_text(valid_actions: list[str], context: str = "") -> str:
+    shown = _ranked_valid_actions(valid_actions, context)
     lines = [f"{index}. {action}" for index, action in enumerate(shown, start=1)]
     if len(valid_actions) > len(shown):
         lines.append(f"... {len(valid_actions) - len(shown)} more actions omitted")
@@ -380,34 +387,48 @@ def messages_for_scienceworld_stage(
         )
     elif stage == "progress_verification":
         action = _clip(steps[-1].action if steps else "", 120)
-        last_obs = _clip(steps[-1].observation if steps else observation, MAX_OBS_CHARS)
+        last_obs = _clip(steps[-1].observation if steps else observation, MAX_VERIFY_OBS_CHARS)
+        recent = _clip(_short_history(steps), MAX_VERIFY_HISTORY_CHARS)
         user = (
             "Return JSON only: {\"continue\":true|false,\"status\":\"...\"}. "
             "Set continue=false only if the task is complete or no useful action remains.\n\n"
-            f"TASK:\n{_clip(task_description, MAX_TASK_CHARS)}\n\n"
+            f"TASK:\n{_clip(task_description, MAX_VERIFY_TASK_CHARS)}\n\n"
             f"STEP: {step_index}\nSCORE: {_info_score(info):.1f}/100\nLAST_ACTION: {action}\n\n"
-            f"LAST_OBSERVATION:\n{last_obs}\n\nRECENT_HISTORY:\n{history}"
+            f"LAST_OBSERVATION:\n{last_obs}\n\nRECENT_HISTORY:\n{recent}"
         )
     else:
         raise ValueError(f"unknown ScienceWorld stage: {stage}")
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _select_action(output: str, valid_actions: list[str]) -> tuple[str, bool]:
+def _select_action(output: str, valid_actions: list[str], context: str = "") -> tuple[str, bool]:
+    ranked_actions = _ranked_valid_actions(valid_actions, context)
     parsed = _json_loads_loose(output)
     action = ""
     if isinstance(parsed, dict):
         action = str(parsed.get("action", "")).strip()
+        index_value = parsed.get("action_index", parsed.get("index"))
+        if isinstance(index_value, int) and 1 <= index_value <= len(ranked_actions):
+            return ranked_actions[index_value - 1], False
+        if isinstance(index_value, str) and index_value.strip().isdigit():
+            index = int(index_value.strip())
+            if 1 <= index <= len(ranked_actions):
+                return ranked_actions[index - 1], False
     if not action:
         text = output.strip()
-        for candidate in valid_actions:
+        number_match = re.search(r"\b(\d{1,3})\b", text)
+        if number_match:
+            index = int(number_match.group(1))
+            if 1 <= index <= len(ranked_actions):
+                return ranked_actions[index - 1], False
+        for candidate in ranked_actions + valid_actions:
             if candidate and candidate in text:
                 action = candidate
                 break
     if action in valid_actions:
         return action, False
     lowered = action.lower()
-    for candidate in valid_actions:
+    for candidate in ranked_actions + valid_actions:
         if lowered and lowered == candidate.lower():
             return candidate, False
     for fallback in ("look around", "inventory"):
@@ -516,7 +537,12 @@ def run_scienceworld_workflow(
                 step_stage_results.append(stage_result)
 
             action_output = step_stage_results[-1].output
-            action, invalid = _select_action(action_output, valid_actions)
+            action_context = (
+                f"{task_description}\n{observation}\n"
+                f"{_latest_stage_output(step_stage_results, 'state_abstraction')}\n"
+                f"{_latest_stage_output(step_stage_results, 'subgoal_planning')}"
+            )
+            action, invalid = _select_action(action_output, valid_actions, action_context)
             next_observation, reward, done, next_info = env.step(action)
             next_info = dict(next_info or {})
             final_score = _info_score(next_info)

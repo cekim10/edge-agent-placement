@@ -31,12 +31,12 @@ MAX_PLAN_CHARS = 220
 MAX_VERIFY_TASK_CHARS = 160
 MAX_VERIFY_OBS_CHARS = 260
 MAX_VERIFY_HISTORY_CHARS = 180
-MAX_ACTION_TASK_CHARS = 160
-MAX_ACTION_OBS_CHARS = 260
-MAX_ACTION_STATE_CHARS = 180
-MAX_ACTION_PLAN_CHARS = 180
-MAX_VALID_ACTIONS = 14
-MAX_VALID_CHARS = 360
+MAX_ACTION_TASK_CHARS = 110
+MAX_ACTION_OBS_CHARS = 170
+MAX_ACTION_STATE_CHARS = 90
+MAX_ACTION_PLAN_CHARS = 90
+MAX_VALID_ACTIONS = 8
+MAX_VALID_CHARS = 220
 
 
 @dataclass(frozen=True)
@@ -259,6 +259,18 @@ def _parsed_stage(stages: list[ScienceWorldStageResult], stage: str) -> dict[str
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _compact_stage_fields(stage_data: dict[str, Any], keys: tuple[str, ...], max_chars: int) -> str:
+    parts = []
+    for key in keys:
+        value = stage_data.get(key)
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, list):
+            value = ", ".join(str(item) for item in value[:4])
+        parts.append(f"{key}: {value}")
+    return _clip("; ".join(parts), max_chars) if parts else "none"
+
+
 def import_scienceworld() -> Any:
     try:
         from scienceworld import ScienceWorldEnv
@@ -373,17 +385,25 @@ def messages_for_scienceworld_stage(
             f"{common}\n\nSTATE_ABSTRACTION:\n{state}"
         )
     elif stage == "action_selection":
-        state = _clip(_parsed_stage(stages, "state_abstraction"), MAX_ACTION_STATE_CHARS)
-        plan = _clip(_parsed_stage(stages, "subgoal_planning"), MAX_ACTION_PLAN_CHARS)
+        state = _compact_stage_fields(
+            _parsed_stage(stages, "state_abstraction"),
+            ("state_summary", "relevant_objects", "progress", "blockers"),
+            MAX_ACTION_STATE_CHARS,
+        )
+        plan = _compact_stage_fields(
+            _parsed_stage(stages, "subgoal_planning"),
+            ("subgoal", "plan", "stop_condition"),
+            MAX_ACTION_PLAN_CHARS,
+        )
         action_context = f"{task_description}\n{observation}\n{state}\n{plan}"
         user = (
-            "Choose one next action. Return JSON only: {\"action\":\"...\"}. "
-            "Copy action exactly from VALID_ACTIONS.\n\n"
-            f"TASK:\n{_clip(task_description, MAX_ACTION_TASK_CHARS)}\n\n"
-            f"STEP: {step_index}\nSCORE: {score:.1f}/100\n\n"
-            f"OBSERVATION:\n{_clip(observation, MAX_ACTION_OBS_CHARS)}\n\n"
-            f"STATE:\n{state}\n\nPLAN:\n{plan}\n\n"
-            f"VALID_ACTIONS:\n{_valid_actions_text(valid, action_context)}"
+            "Pick the best next action by number. Return JSON only: {\"index\":N}.\n\n"
+            f"TASK: {_clip(task_description, MAX_ACTION_TASK_CHARS)}\n"
+            f"STEP: {step_index} SCORE: {score:.1f}/100\n"
+            f"OBS: {_clip(observation, MAX_ACTION_OBS_CHARS)}\n"
+            f"STATE: {state}\n"
+            f"PLAN: {plan}\n"
+            f"ACTIONS:\n{_valid_actions_text(valid, action_context)}"
         )
     elif stage == "progress_verification":
         action = _clip(steps[-1].action if steps else "", 120)

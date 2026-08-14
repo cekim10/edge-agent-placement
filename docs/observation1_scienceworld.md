@@ -53,6 +53,15 @@ sudo apt-get update
 sudo apt-get install -y default-jre
 ```
 
+If `/v1/chat/completions` hangs while `/v1/completions` works, install
+`transformers` and use the completions endpoint with the same model chat
+template applied client-side:
+
+```bash
+uv pip install transformers
+export CLOUD_API_KIND=completions
+```
+
 ## Local Harness Smoke
 
 This does not require ScienceWorld:
@@ -90,6 +99,21 @@ python3 scripts/run_scienceworld_observation1.py \
   --plan-max-tokens 120 \
   --action-max-tokens 48 \
   --verify-max-tokens 64 \
+  --dump-prompts
+```
+
+For Mistral with the completions-path workaround:
+
+```bash
+CLOUD_API_KIND=completions \
+CLOUD_MODEL=mistralai/Mistral-7B-Instruct-v0.3 \
+python3 scripts/run_scienceworld_observation1.py \
+  --task-name find-non-living-thing \
+  --variations 0 \
+  --limit 1 \
+  --max-steps 8 \
+  --only-placement all_cloud \
+  --timeout-s 120 \
   --dump-prompts
 ```
 

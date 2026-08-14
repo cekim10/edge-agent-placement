@@ -17,6 +17,7 @@ class Endpoint:
     tier: str
     base_url: str
     model: str
+    api_kind: str = "chat"
 
 
 DEFAULT_ENDPOINTS = {
@@ -24,11 +25,13 @@ DEFAULT_ENDPOINTS = {
         tier="edge",
         base_url=os.environ.get("EDGE_BASE_URL", "http://elves-01:8001/v1"),
         model=os.environ.get("EDGE_MODEL", "Qwen/Qwen2.5-3B-Instruct"),
+        api_kind=os.environ.get("EDGE_API_KIND", os.environ.get("API_KIND", "chat")),
     ),
     "cloud": Endpoint(
         tier="cloud",
         base_url=os.environ.get("CLOUD_BASE_URL", "http://elves-02:8002/v1"),
         model=os.environ.get("CLOUD_MODEL", "Qwen/Qwen2.5-7B-Instruct"),
+        api_kind=os.environ.get("CLOUD_API_KIND", os.environ.get("API_KIND", "chat")),
     ),
 }
 
@@ -59,6 +62,67 @@ class VLLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.max_tokens_by_stage = max_tokens_by_stage or {}
+        self._tokenizers: dict[str, Any] = {}
+
+    def _tokenizer_for_model(self, model: str) -> Any:
+        tokenizer = self._tokenizers.get(model)
+        if tokenizer is not None:
+            return tokenizer
+        try:
+            from transformers import AutoTokenizer
+        except ImportError as exc:
+            raise RuntimeError(
+                "CLOUD_API_KIND/EDGE_API_KIND=completions requires transformers so the client can "
+                "apply the model chat template before calling /v1/completions. Install with: "
+                "uv pip install transformers"
+            ) from exc
+        tokenizer = AutoTokenizer.from_pretrained(model)
+        self._tokenizers[model] = tokenizer
+        return tokenizer
+
+    def _prompt_from_messages(self, endpoint: Endpoint, messages: list[dict[str, str]]) -> str:
+        tokenizer = self._tokenizer_for_model(endpoint.model)
+        try:
+            return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to apply chat template for {endpoint.model}: {exc}") from exc
+
+    def _payload_for_request(
+        self,
+        *,
+        endpoint: Endpoint,
+        messages: list[dict[str, str]],
+        request_max_tokens: int,
+    ) -> tuple[str, dict[str, Any], int | None]:
+        api_kind = endpoint.api_kind.strip().lower()
+        if api_kind in {"chat", "chat_completions", "chat/completions"}:
+            return (
+                endpoint.base_url.rstrip("/") + "/chat/completions",
+                {
+                    "model": endpoint.model,
+                    "messages": messages,
+                    "temperature": self.temperature,
+                    "top_p": 1.0,
+                    "max_tokens": request_max_tokens,
+                },
+                None,
+            )
+        if api_kind in {"completion", "completions", "text"}:
+            prompt = self._prompt_from_messages(endpoint, messages)
+            tokenizer = self._tokenizer_for_model(endpoint.model)
+            prompt_tokens = len(tokenizer(prompt, add_special_tokens=False).input_ids)
+            return (
+                endpoint.base_url.rstrip("/") + "/completions",
+                {
+                    "model": endpoint.model,
+                    "prompt": prompt,
+                    "temperature": self.temperature,
+                    "top_p": 1.0,
+                    "max_tokens": request_max_tokens,
+                },
+                prompt_tokens,
+            )
+        raise ValueError(f"Unsupported api_kind for {endpoint.tier}: {endpoint.api_kind!r}")
 
     def chat(
         self,
@@ -70,15 +134,12 @@ class VLLMClient:
     ) -> str:
         del incident
         endpoint = self.endpoints[tier]
-        url = endpoint.base_url.rstrip("/") + "/chat/completions"
         request_max_tokens = self.max_tokens_by_stage.get(stage, self.max_tokens)
-        payload = {
-            "model": endpoint.model,
-            "messages": messages,
-            "temperature": self.temperature,
-            "top_p": 1.0,
-            "max_tokens": request_max_tokens,
-        }
+        url, payload, prompt_tokens = self._payload_for_request(
+            endpoint=endpoint,
+            messages=messages,
+            request_max_tokens=request_max_tokens,
+        )
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             url,
@@ -94,18 +155,23 @@ class VLLMClient:
             raise RuntimeError(
                 f"Timed out calling {tier} {stage} endpoint {url} after {self.timeout_s:.1f}s "
                 f"with max_tokens={request_max_tokens}"
+                f"{f' prompt_tokens={prompt_tokens}' if prompt_tokens is not None else ''}"
             ) from exc
         except TimeoutError as exc:
             raise RuntimeError(
                 f"Timed out calling {tier} {stage} endpoint {url} after {self.timeout_s:.1f}s "
                 f"with max_tokens={request_max_tokens}"
+                f"{f' prompt_tokens={prompt_tokens}' if prompt_tokens is not None else ''}"
             ) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Failed to call {tier} {stage} endpoint {url}: {exc}") from exc
         elapsed = time.perf_counter() - started
         if not body.get("choices"):
             raise RuntimeError(f"Empty response from {tier} endpoint after {elapsed:.2f}s")
-        return body["choices"][0]["message"]["content"]
+        choice = body["choices"][0]
+        if "message" in choice:
+            return choice["message"]["content"]
+        return choice.get("text", "")
 
 
 class MockClient:

@@ -65,9 +65,9 @@ class MicroMockClient:
             return json.dumps(instance.classification)
         if stage == "plan":
             if tier == "edge" and instance.b_level == "hard" and instance.instance_id.endswith(("0002", "0005", "0008")):
-                return json.dumps({"ops": instance.invalid_plan["ops"]})
+                return json.dumps(instance.invalid_plan["ops"][0])
             classification = _classification_from_messages(messages)
-            return json.dumps({"ops": [_op_from_classification(classification)]})
+            return json.dumps(_op_from_classification(classification))
         raise ValueError(stage)
 
 
@@ -156,7 +156,7 @@ def _plan_prompt(instance: AccessInstance, classification: dict[str, Any]) -> li
         "\n".join(
             [
                 "Use only the supplied classification and candidate records.",
-                "Return {\"ops\":[{\"op\":...,\"user_id\":...,\"resource\":...,\"role\":...}]}",
+                "Return exactly one operation object with keys op, user_id, resource, role.",
                 f"Allowed op for category: {category_to_op}",
                 f"CLASSIFICATION: {json.dumps(classification, sort_keys=True)}",
                 f"CANDIDATE_RECORDS: {json.dumps(_candidate_records(instance), sort_keys=True)}",
@@ -243,11 +243,12 @@ def run_micro_workflow(
             "predicted_ops": None,
         }
 
-    commit = service.commit(plan.parsed["ops"])
+    predicted_ops = [plan.parsed]
+    commit = service.commit(predicted_ops)
     return {
         "stages": [stage.to_dict() for stage in stages],
         "commit": commit.__dict__,
         "final_state": service.state(),
         "predicted_classification": classify.parsed,
-        "predicted_ops": plan.parsed["ops"],
+        "predicted_ops": predicted_ops,
     }

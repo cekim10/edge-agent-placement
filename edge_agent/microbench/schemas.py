@@ -27,22 +27,12 @@ CLASSIFY_SCHEMA: dict[str, Any] = {
 PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "ops": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "op": {"type": "string", "enum": list(OP_TYPES)},
-                    "user_id": {"type": "string"},
-                    "resource": {"type": "string"},
-                    "role": {"type": "string"},
-                },
-                "required": ["op", "user_id", "resource", "role"],
-                "additionalProperties": False,
-            },
-        }
+        "op": {"type": "string", "enum": list(OP_TYPES)},
+        "user_id": {"type": "string"},
+        "resource": {"type": "string"},
+        "role": {"type": "string"},
     },
-    "required": ["ops"],
+    "required": ["op", "user_id", "resource", "role"],
     "additionalProperties": False,
 }
 
@@ -89,17 +79,11 @@ def validate_classification(value: dict[str, Any]) -> str | None:
 
 
 def validate_plan(value: dict[str, Any]) -> str | None:
-    ops = value.get("ops")
-    if not isinstance(ops, list):
-        return "bad_ops"
-    for op in ops:
-        if not isinstance(op, dict):
-            return "bad_op_item"
-        if op.get("op") not in OP_TYPES:
-            return "bad_op_type"
-        for key in ("user_id", "resource", "role"):
-            if not isinstance(op.get(key), str) or not op[key]:
-                return f"bad_op_{key}"
+    if value.get("op") not in OP_TYPES:
+        return "bad_op_type"
+    for key in ("user_id", "resource", "role"):
+        if not isinstance(value.get(key), str) or not value[key]:
+            return f"bad_op_{key}"
     return None
 
 
@@ -109,4 +93,3 @@ def canonical_op(op: dict[str, str]) -> tuple[str, str, str, str]:
 
 def canonical_ops(ops: list[dict[str, str]]) -> set[tuple[str, str, str, str]]:
     return {canonical_op(op) for op in ops}
-

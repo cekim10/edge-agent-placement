@@ -31,6 +31,11 @@ Final quality:
 copy repo -> convert generated edit JSON to unified diff -> git apply -> run task-specific reproducer
 ```
 
+`test_repair` is a real feedback stage: the harness applies the Stage B patch
+to a temporary copy, runs the task-specific validation, and passes only the
+patch/test failure summary to Stage C. It does not use hidden solutions or
+task-specific oracle patches.
+
 The validator uses the traceback file from the problem statement when present,
 then fenced Python repro code, and falls back to `python3 -m pytest -q` only
 when the issue does not contain a specific reproducer. This avoids penalizing
@@ -47,15 +52,17 @@ git clone https://github.com/SWE-agent/test-repo.git ~/test-repo
 ## Clean All-Cloud Baseline
 
 ```bash
-CLOUD_MODEL=Qwen/Qwen2.5-14B-Instruct \
+CLOUD_API_KIND=completions \
+CLOUD_MODEL=mistralai/Mistral-7B-Instruct-v0.3 \
 python3 scripts/run_swe_testrepo_observation1.py \
   --repo-path ~/test-repo \
   --only-placement all_cloud \
-  --timeout-s 180 \
-  --max-tokens 1024 \
-  --analysis-max-tokens 256 \
-  --patch-max-tokens 768 \
-  --repair-max-tokens 768
+  --timeout-s 120 \
+  --max-tokens 256 \
+  --analysis-max-tokens 96 \
+  --patch-max-tokens 160 \
+  --repair-max-tokens 160 \
+  --dump-prompts
 ```
 
 Do not run placement variants until all-cloud pass rate is meaningful.
@@ -63,14 +70,17 @@ Do not run placement variants until all-cloud pass rate is meaningful.
 ## Stage Sensitivity
 
 ```bash
-CLOUD_MODEL=Qwen/Qwen2.5-14B-Instruct \
+CLOUD_API_KIND=completions \
+EDGE_MODEL=Qwen/Qwen2.5-3B-Instruct \
+CLOUD_MODEL=mistralai/Mistral-7B-Instruct-v0.3 \
 python3 scripts/run_swe_testrepo_observation1.py \
   --repo-path ~/test-repo \
-  --timeout-s 180 \
-  --max-tokens 1024 \
-  --analysis-max-tokens 256 \
-  --patch-max-tokens 768 \
-  --repair-max-tokens 768
+  --timeout-s 120 \
+  --max-tokens 256 \
+  --analysis-max-tokens 96 \
+  --patch-max-tokens 160 \
+  --repair-max-tokens 160 \
+  --dump-prompts
 ```
 
 Placements:

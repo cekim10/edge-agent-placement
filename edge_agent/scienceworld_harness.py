@@ -248,8 +248,22 @@ def _ranked_valid_actions(
         if "non-living" in context_lower:
             if any(word in lowered for word in ("orange", "apple", "banana", "plant", "animal", "person", "air")):
                 score -= 6
-            if any(word in lowered for word in ("picture", "box", "table", "chair", "door", "book", "key", "metal", "wood")):
+            if any(word in lowered for word in ("picture", "box", "table", "chair", "book", "key", "metal", "wood", "mattress")):
                 score += 6
+            if lowered.startswith(("take", "pick up", "put", "place", "move")):
+                score += 8
+            if lowered.startswith("go to"):
+                score += 6
+            if "kitchen" in lowered:
+                score += 4
+            if lowered.startswith("open") and "door" in lowered:
+                score += 4
+            if lowered.startswith("close") and "door" in lowered:
+                score -= 14
+            if lowered.startswith("focus") and "door" in lowered:
+                score -= 8
+            if "red box" in lowered:
+                score += 10
         scored.append((-score, index, action))
     return [action for _score, _index, action in sorted(scored)[:MAX_VALID_ACTIONS]]
 

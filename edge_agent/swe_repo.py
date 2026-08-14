@@ -258,8 +258,8 @@ def _extract_likely_files(results: list[SWEStageResult], repo_path: Path, issue:
     candidates.extend(_issue_traceback_files(issue, repo_path))
     candidates.extend(_issue_import_files(issue, repo_path))
     candidates.extend(path for path in available if path in issue)
-    if results:
-        text = results[-1].output
+    for result in results:
+        text = result.output
         try:
             parsed = json.loads(text)
             if isinstance(parsed, dict):
@@ -301,6 +301,19 @@ def _localized_repo_context(repo_path: Path, results: list[SWEStageResult], issu
     return _clip("\n\n".join(chunks), MAX_LOCALIZED_CONTEXT_CHARS)
 
 
+def _validation_hint(issue: str) -> str:
+    hints = []
+    traceback_files = re.findall(r'File\s+"([^"]+\.py)"', issue)
+    if traceback_files:
+        hints.append("traceback_files=" + ", ".join(traceback_files[:2]))
+    if "SyntaxError" in issue:
+        hints.append("validation=py_compile on traceback files")
+    code_blocks = _issue_python_blocks(issue)
+    if code_blocks:
+        hints.append("reproducer=" + _clip(" ".join(code_blocks), 220))
+    return "\n".join(hints)
+
+
 def _prior_block(results: list[SWEStageResult]) -> str:
     if not results:
         return "None"
@@ -334,20 +347,29 @@ def messages_for_swe_stage(
         )
     elif stage == "patch_generation":
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
+        validation = _validation_hint(task.problem_statement)
+        validation_text = f"\n\nVALIDATION_TARGET:\n{validation}" if validation else ""
         user = (
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
             "Use line/new to replace one line, or after/insert to insert one line. "
+            "The line number must be the L number from FILE_SNIPPET. "
             "Smallest executable-code edit only. No whole-file rewrite. "
+            "For a missing colon, replace only the function signature line. "
+            "For a failing assert, edit source code, not tests. "
             'If unsure return {"edits":[]}.\n\n'
-            f"ISSUE:\n{issue}\n\n{context}{prior_text}"
+            f"ISSUE:\n{issue}\n\n{context}{validation_text}{prior_text}"
         )
     elif stage == "test_repair":
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
+        validation = _validation_hint(task.problem_statement)
+        validation_text = f"\n\nVALIDATION_TARGET:\n{validation}" if validation else ""
         user = (
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
             "Use line/new to replace one line, or after/insert to insert one line. Keep or improve prior edit. "
+            "The line number must be the L number from FILE_SNIPPET. "
+            "For a failing assert, edit source code, not tests. "
             'If unsure return {"edits":[]}.\n\n'
-            f"ISSUE:\n{issue}\n\n{context}{prior_text}"
+            f"ISSUE:\n{issue}\n\n{context}{validation_text}{prior_text}"
         )
     else:
         raise ValueError(f"unknown SWE stage: {stage}")
@@ -464,18 +486,21 @@ def _edit_plan_to_diff(repo_path: Path, text: str) -> str:
             new_lines = _strip_prompt_line_numbers(new_line).splitlines()
             if not new_lines:
                 continue
-            replacement_at = _replacement_index(current_lines, line_number - 1, new_lines[0])
-            if replacement_at is not None:
-                old_line = current_lines[replacement_at]
-                ending = "\n" if old_line.endswith("\n") else ""
-                new_lines[0] = _preserve_first_line_indent(old_line, new_lines[0])
-                replacement = [line.rstrip("\n") + "\n" for line in new_lines]
-                if replacement:
-                    replacement[-1] = replacement[-1].rstrip("\n") + ending
-                span = max(1, len(new_lines))
-                current_lines[replacement_at : replacement_at + span] = replacement
-                updated_by_file[rel] = "".join(current_lines)
-                continue
+            if 1 <= line_number <= len(current_lines):
+                replacement_at = line_number - 1
+            else:
+                replacement_at = _replacement_index(current_lines, line_number - 1, new_lines[0])
+                if replacement_at is None:
+                    continue
+            old_line = current_lines[replacement_at]
+            ending = "\n" if old_line.endswith("\n") else ""
+            new_lines[0] = _preserve_first_line_indent(old_line, new_lines[0])
+            replacement = [line.rstrip("\n") + "\n" for line in new_lines]
+            if replacement:
+                replacement[-1] = replacement[-1].rstrip("\n") + ending
+            current_lines[replacement_at : replacement_at + 1] = replacement
+            updated_by_file[rel] = "".join(current_lines)
+            continue
 
         insert_line = edit.get("insert")
         after_line = edit.get("after")
@@ -714,6 +739,37 @@ def run_swe_workflow(
         if stage == "test_repair" and not include_prior:
             results.append(SWEStageResult(stage=stage, tier=tier, latency_s=0.0, output=""))
             continue
+        if stage == "test_repair":
+            if not final_patch.strip():
+                results.append(SWEStageResult(stage=stage, tier=tier, latency_s=0.0, output=""))
+                continue
+            probe_repo = copy_repo_to_temp(repo_path)
+            try:
+                patch_result = apply_patch(probe_repo, final_patch)
+                test_result = run_task_validation(probe_repo, task)
+            finally:
+                shutil.rmtree(probe_repo.parent, ignore_errors=True)
+            feedback = {
+                "candidate_patch_applied": patch_result.get("applied", False),
+                "candidate_patch_stderr": _clip(patch_result.get("stderr", ""), 900),
+                "candidate_test_passed": test_result.get("passed", False),
+                "candidate_test_result": test_result.get("result", ""),
+                "candidate_validation": test_result.get("validation", ""),
+                "candidate_stdout": _clip(test_result.get("stdout", ""), 900),
+                "candidate_stderr": _clip(test_result.get("stderr", ""), 900),
+                "candidate_patch": _clip(final_patch, 1400),
+            }
+            results.append(
+                SWEStageResult(
+                    stage="test_feedback",
+                    tier="local",
+                    latency_s=0.0,
+                    output=json.dumps(feedback, ensure_ascii=False),
+                )
+            )
+            if patch_result.get("applied") and test_result.get("passed"):
+                results.append(SWEStageResult(stage=stage, tier=tier, latency_s=0.0, output=""))
+                continue
         messages = messages_for_swe_stage(
             task=task,
             repo_path=repo_path,
@@ -741,7 +797,9 @@ def run_swe_workflow(
         results.append(SWEStageResult(stage=stage, tier=tier, latency_s=latency_s, output=output))
         if stage in {"patch_generation", "test_repair"}:
             candidate_patch = extract_patch_or_edit_diff(output, repo_path)
-            if stage == "patch_generation" or (include_prior and candidate_patch.strip()):
+            if stage == "patch_generation":
+                final_patch = candidate_patch
+            elif include_prior and candidate_patch.strip():
                 final_patch = candidate_patch
     return results, final_patch
 

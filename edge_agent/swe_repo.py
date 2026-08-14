@@ -30,11 +30,12 @@ from .client import ChatClient
 
 SWE_STAGES = ("issue_analysis", "patch_generation", "test_repair")
 
-MAX_ISSUE_CHARS = 650
-MAX_TREE_CHARS = 1800
+MAX_ISSUE_CHARS = 520
+MAX_PATCH_ISSUE_CHARS = 260
+MAX_TREE_CHARS = 1400
 MAX_CONTEXT_CHARS = 4000
-MAX_LOCALIZED_CONTEXT_CHARS = 1500
-MAX_PRIOR_CHARS = 600
+MAX_LOCALIZED_CONTEXT_CHARS = 640
+MAX_PRIOR_CHARS = 220
 MAX_PATCH_CHARS = 12000
 
 
@@ -189,7 +190,7 @@ def _issue_import_files(issue: str, repo_path: Path) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
-def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 850) -> str:
+def _numbered_file_snippet(text: str, issue: str, radius: int = 2, max_chars: int = 420) -> str:
     lines = text.splitlines()
     selected: set[int] = set()
     explicit_issue_lines = set(_issue_line_numbers(issue))
@@ -282,8 +283,8 @@ def _extract_likely_files(results: list[SWEStageResult], repo_path: Path, issue:
                 seen.add(match)
                 selected.append(match)
     if not selected:
-        selected = [path for path in available if path.endswith(".py")][:4]
-    return selected[:2]
+        selected = [path for path in available if path.endswith(".py")][:2]
+    return selected[:1]
 
 
 def _localized_repo_context(repo_path: Path, results: list[SWEStageResult], issue: str) -> str:
@@ -310,17 +311,33 @@ def _validation_hint(issue: str) -> str:
         hints.append("validation=py_compile on traceback files")
     code_blocks = _issue_python_blocks(issue)
     if code_blocks:
-        hints.append("reproducer=" + _clip(" ".join(code_blocks), 220))
+        hints.append("reproducer=" + _clip(" ".join(code_blocks), 140))
     return "\n".join(hints)
 
 
 def _prior_block(results: list[SWEStageResult]) -> str:
     if not results:
         return "None"
-    text = "\n\n".join(
-        f"{result.stage.upper()} OUTPUT:\n{_clip(result.output, MAX_PRIOR_CHARS)}"
-        for result in results
-    )
+    chunks = []
+    for result in results:
+        parsed = _extract_json_object(result.output)
+        if result.stage == "issue_analysis" and parsed:
+            compact = {
+                key: parsed.get(key)
+                for key in ("likely_files", "fix_strategy", "bug_summary")
+                if parsed.get(key)
+            }
+            chunks.append(f"{result.stage.upper()}:\n{_clip(json.dumps(compact, ensure_ascii=False), MAX_PRIOR_CHARS)}")
+        elif result.stage == "test_feedback":
+            compact = {
+                key: parsed.get(key)
+                for key in ("candidate_patch_applied", "candidate_test_passed", "candidate_validation", "candidate_stderr")
+                if key in parsed
+            }
+            chunks.append(f"{result.stage.upper()}:\n{_clip(json.dumps(compact, ensure_ascii=False), MAX_PRIOR_CHARS)}")
+        else:
+            chunks.append(f"{result.stage.upper()}:\n{_clip(result.output, MAX_PRIOR_CHARS)}")
+    text = "\n\n".join(chunks)
     return _clip(text, MAX_PRIOR_CHARS)
 
 
@@ -332,7 +349,8 @@ def messages_for_swe_stage(
     results: list[SWEStageResult],
     include_prior: bool = True,
 ) -> list[dict[str, str]]:
-    issue = _clip(_sanitize_prompt_text(task.problem_statement), MAX_ISSUE_CHARS)
+    issue_limit = MAX_ISSUE_CHARS if stage == "issue_analysis" else MAX_PATCH_ISSUE_CHARS
+    issue = _clip(_sanitize_prompt_text(task.problem_statement), issue_limit)
     if stage == "issue_analysis":
         context = _repo_tree_context(repo_path)
     else:
@@ -351,12 +369,9 @@ def messages_for_swe_stage(
         validation_text = f"\n\nVALIDATION_TARGET:\n{validation}" if validation else ""
         user = (
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
-            "Use line/new to replace one line, or after/insert to insert one line. "
-            "The line number must be the L number from FILE_SNIPPET. "
-            "Smallest executable-code edit only. No whole-file rewrite. "
-            "For a missing colon, replace only the function signature line. "
-            "For a failing assert, edit source code, not tests. "
-            'If unsure return {"edits":[]}.\n\n'
+            "Line is the L number. One minimal source edit. No markdown. "
+            "Missing colon: replace signature line only. Failing assert: edit source, not tests. "
+            'Unsure: {"edits":[]}.\n\n'
             f"ISSUE:\n{issue}\n\n{context}{validation_text}{prior_text}"
         )
     elif stage == "test_repair":
@@ -365,10 +380,9 @@ def messages_for_swe_stage(
         validation_text = f"\n\nVALIDATION_TARGET:\n{validation}" if validation else ""
         user = (
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
-            "Use line/new to replace one line, or after/insert to insert one line. Keep or improve prior edit. "
-            "The line number must be the L number from FILE_SNIPPET. "
-            "For a failing assert, edit source code, not tests. "
-            'If unsure return {"edits":[]}.\n\n'
+            "Line is the L number. Fix the validation failure. No markdown. "
+            "Failing assert: edit source, not tests. "
+            'Unsure: {"edits":[]}.\n\n'
             f"ISSUE:\n{issue}\n\n{context}{validation_text}{prior_text}"
         )
     else:

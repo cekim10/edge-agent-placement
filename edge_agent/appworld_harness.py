@@ -124,6 +124,19 @@ def _extract_code(text: str) -> str:
     return candidate.strip()
 
 
+def _sanitize_appworld_code(code: str, apps: list[str]) -> str:
+    sanitized_lines = []
+    for line in code.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("import ") or stripped.startswith("from "):
+            continue
+        sanitized_lines.append(line)
+    sanitized = "\n".join(sanitized_lines)
+    for app_name in apps:
+        sanitized = re.sub(rf"(?<![\w.]){re.escape(app_name)}\.", f"apis.{app_name}.", sanitized)
+    return sanitized.strip()
+
+
 def _summarize_app_descriptions(app_descriptions: dict[str, Any]) -> str:
     lines = []
     for name, description in sorted(app_descriptions.items()):
@@ -178,50 +191,75 @@ def _doc_lookup_code(selected_apps: list[str]) -> str:
         "        print('\\n## ' + label + ' ERROR')",
         "        print(type(exc).__name__ + ': ' + str(exc))",
         "",
+        "show('supervisor complete_task doc', lambda: apis.api_docs.show_api_doc('supervisor', 'complete_task'))",
+        "show('supervisor account passwords', lambda: apis.supervisor.show_account_passwords())",
     ]
     for app_name in apps[:3]:
-        lines.extend(
-            [
-                f"show('{app_name} available API names', lambda: [name for name in dir(apis.{app_name}) if not name.startswith('_')])",
-                f"show('{app_name} api descriptions', lambda: apis.api_docs.show_api_descriptions('{app_name}'))",
-                f"show('{app_name} login doc', lambda: apis.api_docs.show_api_doc('{app_name}', 'login'))",
-            ]
-        )
-        for api_name in ("show_profile", "show_account", "show_playlists", "show_playlist", "show_tracks", "show_track"):
+        for api_name in (
+            "login",
+            "show_song_library",
+            "show_song_privates",
+            "show_song",
+            "search_songs",
+            "show_genres",
+            "show_profile",
+            "show_account",
+            "show_playlist_library",
+            "show_playlist",
+        ):
             lines.append(
                 f"show('{app_name} {api_name} doc', lambda: apis.api_docs.show_api_doc('{app_name}', '{api_name}'))"
             )
-    lines.extend(
-        [
-            "show('supervisor complete_task doc', lambda: apis.api_docs.show_api_doc('supervisor', 'complete_task'))",
-            "show('supervisor account passwords', lambda: apis.supervisor.show_account_passwords())",
-        ]
-    )
+        lines.append(f"show('{app_name} available API names', lambda: [name for name in dir(apis.{app_name}) if not name.startswith('_')])")
     return "\n".join(lines)
 
 
 def _compact_doc_output(text: str, max_chars: int) -> str:
-    keywords = (
-        "available API names",
-        "api descriptions",
-        "login doc",
-        "complete_task",
+    section_keywords = (
+        "complete_task doc",
         "account passwords",
-        "access_token",
-        "song",
-        "track",
-        "playlist",
-        "genre",
-        "played",
+        "login doc",
+        "show_song_library doc",
+        "show_song_privates doc",
+        "show_song doc",
+        "search_songs doc",
+        "show_genres doc",
+        "show_playlist_library doc",
+        "available API names",
     )
-    kept: list[str] = []
+    sections: list[tuple[str, list[str]]] = []
+    current_label = ""
+    current_lines: list[str] = []
     for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        lowered = stripped.lower()
-        if any(keyword.lower() in lowered for keyword in keywords):
-            kept.append(stripped)
+        if line.startswith("## "):
+            if current_label:
+                sections.append((current_label, current_lines))
+            current_label = line[3:].strip()
+            current_lines = []
+        elif current_label:
+            current_lines.append(line.rstrip())
+    if current_label:
+        sections.append((current_label, current_lines))
+
+    kept: list[str] = []
+    for keyword in section_keywords:
+        for label, lines in sections:
+            if keyword in label.lower():
+                body_lines = [line for line in lines if line.strip()]
+                if "available API names" in label.lower():
+                    body_lines = [
+                        line
+                        for line in body_lines
+                        if any(name in line for name in ("login", "show_song", "search_songs", "show_genres", "show_playlist"))
+                    ][:8]
+                else:
+                    body_lines = body_lines[:10]
+                kept.append("## " + label)
+                kept.extend(body_lines)
+                break
+        if len("\n".join(kept)) >= max_chars:
+            break
+
     if not kept:
         kept = [line.strip() for line in text.splitlines() if line.strip()]
     return _clip("\n".join(kept), max_chars)
@@ -354,7 +392,8 @@ def messages_for_appworld_stage(
     system = "You are a deterministic AppWorld agent."
     appworld_rules = (
         "Rules: no imports; use preloaded apis only. "
-        "For private apps get passwords, login, then call APIs. "
+        "Call APIs exactly as apis.<app>.<api>(...). Never use bare spotify or external clients. "
+        "Do not invent get_top_tracks/current_user/recently_played APIs. "
         "Always finish with apis.supervisor.complete_task(answer=...)."
     )
     if stage == "task_analysis":
@@ -369,10 +408,16 @@ def messages_for_appworld_stage(
             f"INSTRUCTION:\n{instruction}\n\nAPPS:\n{apps}\n\nRELEVANT_APPS:\n{selected_apps_text}"
         )
     elif stage == "code_generation":
-        code_prior = _compact_prior(results, doc_chars=240, max_chars=360)
+        code_prior = _compact_prior(results, doc_chars=520, max_chars=680)
+        spotify_hint = ""
+        if "spotify" in selected_apps:
+            spotify_hint = (
+                "\nFor Spotify answer tasks: get passwords, login, read song/library/private APIs from DOCS, "
+                "sort/filter in Python, then complete_task(answer=', '.join(titles))."
+            )
         user = (
-            f"{appworld_rules} Return Python code only.\n\n"
-            f"TASK:\n{_clip(instruction, 260)}\n\nAPPS:\n{selected_apps_text}\n\nDOCS:\n{api_docs}\n\nPRIOR:\n{code_prior}"
+            f"{appworld_rules} No comments. Max 20 lines. Return Python code only.\n\n"
+            f"TASK:\n{_clip(instruction, 260)}\n\nAPPS:\n{selected_apps_text}{spotify_hint}\n\nDOCS:\n{api_docs}\n\nPRIOR:\n{code_prior}"
         )
     elif stage == "execution_verification":
         verify_prior = _compact_prior(results, doc_chars=120, max_chars=220)
@@ -524,7 +569,7 @@ def run_appworld_workflow(
                 stages.append(AppWorldStageResult(stage=stage, tier=tier, latency_s=latency_s, output=output))
 
                 if stage == "code_generation":
-                    generated_code = _extract_code(output)
+                    generated_code = _sanitize_appworld_code(_extract_code(output), _apps_for_task(task_info, stages))
                     exec_started = time.perf_counter()
                     exec_output = world.execute(generated_code)
                     execution_outputs.append(
@@ -537,7 +582,7 @@ def run_appworld_workflow(
                     )
                     evaluation = _evaluation_to_dict(world)
                 elif stage == "execution_verification":
-                    repair_code = _extract_code(output)
+                    repair_code = _sanitize_appworld_code(_extract_code(output), _apps_for_task(task_info, stages))
                     if repair_code:
                         exec_started = time.perf_counter()
                         exec_output = world.execute(repair_code)

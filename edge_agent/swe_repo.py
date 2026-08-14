@@ -35,7 +35,7 @@ MAX_PATCH_ISSUE_CHARS = 260
 MAX_TREE_CHARS = 1400
 MAX_CONTEXT_CHARS = 4000
 MAX_LOCALIZED_CONTEXT_CHARS = 640
-MAX_PRIOR_CHARS = 220
+MAX_PRIOR_CHARS = 360
 MAX_PATCH_CHARS = 12000
 
 
@@ -311,7 +311,10 @@ def _validation_hint(issue: str) -> str:
         hints.append("validation=py_compile on traceback files")
     code_blocks = _issue_python_blocks(issue)
     if code_blocks:
-        hints.append("reproducer=" + _clip(" ".join(code_blocks), 140))
+        code = " ".join(code_blocks)
+        hints.append("reproducer=" + _clip(code, 180))
+        if "assert " in code:
+            hints.append("assertion failure: change runtime behavior, not type annotations or docstrings")
     return "\n".join(hints)
 
 
@@ -331,7 +334,13 @@ def _prior_block(results: list[SWEStageResult]) -> str:
         elif result.stage == "test_feedback":
             compact = {
                 key: parsed.get(key)
-                for key in ("candidate_patch_applied", "candidate_test_passed", "candidate_validation", "candidate_stderr")
+                for key in (
+                    "candidate_patch_applied",
+                    "candidate_test_passed",
+                    "candidate_validation",
+                    "candidate_stderr",
+                    "candidate_patch",
+                )
                 if key in parsed
             }
             chunks.append(f"{result.stage.upper()}:\n{_clip(json.dumps(compact, ensure_ascii=False), MAX_PRIOR_CHARS)}")
@@ -371,6 +380,7 @@ def messages_for_swe_stage(
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
             "Line is the L number. One minimal source edit. No markdown. "
             "Missing colon: replace signature line only. Failing assert: edit source, not tests. "
+            "For assertion failures, do not change only type annotations, imports, comments, or docstrings. "
             'Unsure: {"edits":[]}.\n\n'
             f"ISSUE:\n{issue}\n\n{context}{validation_text}{prior_text}"
         )
@@ -382,6 +392,8 @@ def messages_for_swe_stage(
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
             "Line is the L number. Fix the validation failure. No markdown. "
             "Failing assert: edit source, not tests. "
+            "Do not repeat a prior patch that applied but still failed. "
+            "Do not change only type annotations, comments, or docstrings for runtime assertion failures. "
             'Unsure: {"edits":[]}.\n\n'
             f"ISSUE:\n{issue}\n\n{context}{validation_text}{prior_text}"
         )

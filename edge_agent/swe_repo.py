@@ -35,7 +35,7 @@ MAX_PATCH_ISSUE_CHARS = 260
 MAX_TREE_CHARS = 1400
 MAX_CONTEXT_CHARS = 4000
 MAX_LOCALIZED_CONTEXT_CHARS = 640
-MAX_PRIOR_CHARS = 360
+MAX_PRIOR_CHARS = 240
 MAX_PATCH_CHARS = 12000
 
 
@@ -318,6 +318,10 @@ def _validation_hint(issue: str) -> str:
     return "\n".join(hints)
 
 
+def _is_assertion_task(issue: str) -> bool:
+    return any("assert " in block for block in _issue_python_blocks(issue))
+
+
 def _prior_block(results: list[SWEStageResult]) -> str:
     if not results:
         return "None"
@@ -365,6 +369,7 @@ def messages_for_swe_stage(
     else:
         context = _localized_repo_context(repo_path, results, task.problem_statement)
     prior = _prior_block(results) if include_prior and results else ""
+    assertion_task = _is_assertion_task(task.problem_statement)
     system = "You are a deterministic software engineering agent. Return exactly what is requested."
     if stage == "issue_analysis":
         user = (
@@ -376,24 +381,32 @@ def messages_for_swe_stage(
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         validation = _validation_hint(task.problem_statement)
         validation_text = f"\n\nVALIDATION_TARGET:\n{validation}" if validation else ""
+        assertion_rule = (
+            " For assertion failures, do not change only type annotations, imports, comments, or docstrings."
+            if assertion_task
+            else ""
+        )
         user = (
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
             "Line is the L number. One minimal source edit. No markdown. "
             "Missing colon: replace signature line only. Failing assert: edit source, not tests. "
-            "For assertion failures, do not change only type annotations, imports, comments, or docstrings. "
-            'Unsure: {"edits":[]}.\n\n'
+            f"{assertion_rule} Unsure: {{\"edits\":[]}}.\n\n"
             f"ISSUE:\n{issue}\n\n{context}{validation_text}{prior_text}"
         )
     elif stage == "test_repair":
         prior_text = f"\n\nPRIOR:\n{prior}" if prior else ""
         validation = _validation_hint(task.problem_statement)
         validation_text = f"\n\nVALIDATION_TARGET:\n{validation}" if validation else ""
+        assertion_rule = (
+            " Do not change only type annotations, comments, or docstrings for runtime assertion failures."
+            if assertion_task
+            else ""
+        )
         user = (
             'Return JSON only: {"edits":[{"file":"path.py","line":1,"new":"replacement line"}]}. '
             "Line is the L number. Fix the validation failure. No markdown. "
             "Failing assert: edit source, not tests. "
-            "Do not repeat a prior patch that applied but still failed. "
-            "Do not change only type annotations, comments, or docstrings for runtime assertion failures. "
+            f"Do not repeat a prior patch that applied but still failed.{assertion_rule} "
             'Unsure: {"edits":[]}.\n\n'
             f"ISSUE:\n{issue}\n\n{context}{validation_text}{prior_text}"
         )

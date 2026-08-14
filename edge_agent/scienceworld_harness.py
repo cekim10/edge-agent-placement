@@ -28,8 +28,12 @@ MAX_OBS_CHARS = 650
 MAX_HISTORY_CHARS = 700
 MAX_STATE_CHARS = 420
 MAX_PLAN_CHARS = 420
-MAX_VALID_ACTIONS = 35
-MAX_VALID_CHARS = 750
+MAX_ACTION_TASK_CHARS = 160
+MAX_ACTION_OBS_CHARS = 260
+MAX_ACTION_STATE_CHARS = 180
+MAX_ACTION_PLAN_CHARS = 180
+MAX_VALID_ACTIONS = 14
+MAX_VALID_CHARS = 360
 
 
 @dataclass(frozen=True)
@@ -362,13 +366,16 @@ def messages_for_scienceworld_stage(
             f"{common}\n\nSTATE_ABSTRACTION:\n{state}"
         )
     elif stage == "action_selection":
-        state = _clip(_parsed_stage(stages, "state_abstraction"), MAX_STATE_CHARS)
-        plan = _clip(_parsed_stage(stages, "subgoal_planning"), MAX_PLAN_CHARS)
+        state = _clip(_parsed_stage(stages, "state_abstraction"), MAX_ACTION_STATE_CHARS)
+        plan = _clip(_parsed_stage(stages, "subgoal_planning"), MAX_ACTION_PLAN_CHARS)
         action_context = f"{task_description}\n{observation}\n{state}\n{plan}"
         user = (
-            "Choose the single best next action. Return JSON only: {\"action\":\"...\"}. "
-            "The action string must be copied exactly from VALID_ACTIONS.\n\n"
-            f"{common}\n\nSTATE_ABSTRACTION:\n{state}\n\nPLAN:\n{plan}\n\n"
+            "Choose one next action. Return JSON only: {\"action\":\"...\"}. "
+            "Copy action exactly from VALID_ACTIONS.\n\n"
+            f"TASK:\n{_clip(task_description, MAX_ACTION_TASK_CHARS)}\n\n"
+            f"STEP: {step_index}\nSCORE: {score:.1f}/100\n\n"
+            f"OBSERVATION:\n{_clip(observation, MAX_ACTION_OBS_CHARS)}\n\n"
+            f"STATE:\n{state}\n\nPLAN:\n{plan}\n\n"
             f"VALID_ACTIONS:\n{_valid_actions_text(valid, action_context)}"
         )
     elif stage == "progress_verification":

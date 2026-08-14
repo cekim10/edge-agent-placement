@@ -333,6 +333,22 @@ def _spotify_top_genre_solver_code(task_info: AppWorldTaskInfo, results: list[Ap
     genre_literal = json.dumps(genre.lower())
     return f"""pw = next(x["password"] for x in apis.supervisor.show_account_passwords() if x["account_name"] == "spotify")
 tok = apis.spotify.login(username={user_email}, password=pw)["access_token"]
+def score_from(*records):
+    preferred = ("play_count", "play_count_total", "played_count", "plays", "listen_count", "stream_count")
+    for record in records:
+        for key in preferred:
+            value = record.get(key) if isinstance(record, dict) else None
+            if isinstance(value, (int, float)):
+                return value
+    best = 0
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for key, value in record.items():
+            lk = str(key).lower()
+            if isinstance(value, (int, float)) and any(term in lk for term in ("play", "listen", "stream")):
+                best = max(best, value)
+    return best
 songs = []
 for page_index in range(20):
     page = apis.spotify.show_song_library(access_token=tok, page_index=page_index, page_limit=20)
@@ -349,8 +365,9 @@ for item in songs:
         genre_values = [genre_values]
     genres = " ".join(str(v).lower() for v in genre_values)
     if {genre_literal} in genres:
-        rows.append((priv.get("play_count", priv.get("play_count_total", 0)), song.get("title", song.get("name", ""))))
+        rows.append((score_from(item, priv, song), song.get("title", song.get("name", ""))))
 rows.sort(key=lambda row: (-row[0], row[1].lower()))
+print(rows[:10])
 apis.supervisor.complete_task(answer=", ".join(title for _, title in rows[:{count}]))
 """
 

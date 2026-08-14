@@ -28,8 +28,8 @@ MAX_OBS_CHARS = 650
 MAX_HISTORY_CHARS = 700
 MAX_STATE_CHARS = 420
 MAX_PLAN_CHARS = 420
-MAX_VALID_ACTIONS = 90
-MAX_VALID_CHARS = 1600
+MAX_VALID_ACTIONS = 35
+MAX_VALID_CHARS = 750
 
 
 @dataclass(frozen=True)
@@ -191,8 +191,45 @@ def _short_history(steps: list[ScienceWorldStepResult]) -> str:
     return _clip("\n".join(lines) if lines else "none", MAX_HISTORY_CHARS)
 
 
-def _valid_actions_text(valid_actions: list[str]) -> str:
-    shown = valid_actions[:MAX_VALID_ACTIONS]
+def _valid_actions_text(valid_actions: list[str], context: str = "") -> str:
+    context_words = {
+        word
+        for word in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", context.lower())
+        if len(word) >= 4
+    }
+    preferred_prefixes = (
+        "look",
+        "inventory",
+        "examine",
+        "focus",
+        "open",
+        "close",
+        "move",
+        "go",
+        "take",
+        "pick",
+        "put",
+        "place",
+        "drop",
+        "use",
+        "activate",
+        "deactivate",
+        "pour",
+        "mix",
+        "wait",
+    )
+    scored: list[tuple[int, int, str]] = []
+    for index, action in enumerate(valid_actions):
+        lowered = action.lower()
+        score = 0
+        if any(lowered.startswith(prefix) for prefix in preferred_prefixes):
+            score += 4
+        if any(word in lowered for word in context_words):
+            score += 3
+        if lowered in {"look around", "inventory"}:
+            score += 5
+        scored.append((-score, index, action))
+    shown = [action for _score, _index, action in sorted(scored)[:MAX_VALID_ACTIONS]]
     lines = [f"{index}. {action}" for index, action in enumerate(shown, start=1)]
     if len(valid_actions) > len(shown):
         lines.append(f"... {len(valid_actions) - len(shown)} more actions omitted")
@@ -224,8 +261,9 @@ def import_scienceworld() -> Any:
 
 
 def _make_env(max_steps: int) -> Any:
+    del max_steps
     ScienceWorldEnv = import_scienceworld()
-    for args in (("", None, max_steps, 0), ("",)):
+    for args in (("",), ()):
         try:
             return ScienceWorldEnv(*args)
         except TypeError:
@@ -326,11 +364,12 @@ def messages_for_scienceworld_stage(
     elif stage == "action_selection":
         state = _clip(_parsed_stage(stages, "state_abstraction"), MAX_STATE_CHARS)
         plan = _clip(_parsed_stage(stages, "subgoal_planning"), MAX_PLAN_CHARS)
+        action_context = f"{task_description}\n{observation}\n{state}\n{plan}"
         user = (
             "Choose the single best next action. Return JSON only: {\"action\":\"...\"}. "
             "The action string must be copied exactly from VALID_ACTIONS.\n\n"
             f"{common}\n\nSTATE_ABSTRACTION:\n{state}\n\nPLAN:\n{plan}\n\n"
-            f"VALID_ACTIONS:\n{_valid_actions_text(valid)}"
+            f"VALID_ACTIONS:\n{_valid_actions_text(valid, action_context)}"
         )
     elif stage == "progress_verification":
         action = _clip(steps[-1].action if steps else "", 120)
@@ -380,7 +419,7 @@ def _should_continue(output: str, *, done: bool, score: float) -> bool:
 
 
 def _task_description(env: Any) -> str:
-    for name in ("getTaskDescription", "get_task_description"):
+    for name in ("get_task_description", "getTaskDescription"):
         fn = getattr(env, name, None)
         if callable(fn):
             try:

@@ -167,7 +167,7 @@ def main() -> int:
     parser.add_argument("--only-placement", choices=PLACEMENT_CHOICES)
     parser.add_argument("--timeout-s", type=float, default=120.0)
     parser.add_argument("--max-tokens", type=int, default=128)
-    parser.add_argument("--classify-max-tokens", type=int, default=64)
+    parser.add_argument("--classify-max-tokens", type=int, default=128)
     parser.add_argument("--plan-max-tokens", type=int, default=512)
     parser.add_argument("--mock", action="store_true")
     args = parser.parse_args()

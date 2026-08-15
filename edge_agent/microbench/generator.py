@@ -175,7 +175,7 @@ def _apply_ops(state: dict[str, Any], ops: list[dict[str, str]]) -> dict[str, An
     credentials = set(state["credentials"])
     audit = list(state["audit"])
     for op in ops:
-        key = (op["user_id"], op["resource"], op["role"])
+        key = (op["user_id"], op["resource"], op.get("role", ""))
         if op["op"] == "grant_role":
             roles.add(key)
             audit.append(f"grant:{':'.join(key)}")
@@ -302,12 +302,7 @@ def _build_instance(
     else:
         target_role = ""
         expected_ops = [
-            {
-                "op": "rotate_credential",
-                "user_id": target_id,
-                "resource": resource,
-                "role": "",
-            }
+            {"op": "rotate_credential", "user_id": target_id, "resource": resource}
         ]
 
     # Look-alikes hold roles on the same resource, so resolving the wrong name

@@ -73,6 +73,24 @@ The plan prompt still states the operation vocabulary and what each category
 means, because without that the ground truth would be ambiguous. It does not
 state which operation belongs to the classified category.
 
+### Measurement artifacts removed after the first real run
+
+The first GPU run scored 0.55 end-to-end even on the cloud tier, and the failure
+dump showed the drop was instrumentation rather than reasoning:
+
+- `revoke_role` with an empty role accounted for 8 of 9 cloud failures. The
+  classification carries `role: ""` for revoke, the op schema permitted `""`,
+  and the model copied it instead of enumerating assignments. The op schema is
+  now `anyOf` over a role-bearing shape (real role required) and a credential
+  shape (no role field), so guided decoding cannot produce that op at all.
+- Classify outputs on the 7B tier ran whitespace to `max_tokens` and were scored
+  as schema violations. `guided_whitespace_pattern` now bounds it.
+- Runaway plans were truncated by `max_tokens` and also landed in
+  `schema_violation`. `maxItems` bounds the array so a runaway plan terminates
+  and is scored as the wrong answer it is.
+
+None of these changed the difficulty grid.
+
 ## Frozen Difficulty Grid
 
 This grid is fixed before measurement. Results are reported for every cell,

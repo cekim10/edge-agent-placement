@@ -40,7 +40,7 @@ class AccessControlService:
         credentials = set(self._state.get("credentials", []))
         audit = list(self._state.get("audit", []))
         for op in ops:
-            key = (op["user_id"], op["resource"], op["role"])
+            key = (op["user_id"], op["resource"], op.get("role", ""))
             if op["op"] == "grant_role":
                 roles.add(key)
                 audit.append(f"grant:{':'.join(key)}")

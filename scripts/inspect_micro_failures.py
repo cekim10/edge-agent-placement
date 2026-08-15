@@ -29,7 +29,10 @@ def _load(run_dir: Path) -> dict[str, list[dict[str, Any]]]:
 def _ops_key(ops: list[dict[str, str]] | None) -> set[tuple[str, str, str, str]]:
     if not ops:
         return set()
-    return {(op["op"], op["user_id"], op["resource"], op["role"]) for op in ops}
+    return {
+        (op["op"], op["user_id"], op["resource"], op.get("role", "") or "")
+        for op in ops
+    }
 
 
 def _fmt(ops: set[tuple[str, str, str, str]]) -> str:

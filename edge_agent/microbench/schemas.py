@@ -45,22 +45,49 @@ CLASSIFY_SCHEMA: dict[str, Any] = {
 }
 
 
-OP_SCHEMA: dict[str, Any] = {
+# A role-bearing op must name a real role. Allowing "" here let the model copy
+# the classification's empty role straight into revoke_role, producing an
+# operation that means nothing and silently matches no assignment, which is what
+# every early revoke failure turned out to be. rotate_credential carries no role
+# at all rather than an empty one.
+ROLE_OP_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "op": {"type": "string", "enum": list(OP_TYPES)},
+        "op": {"type": "string", "enum": ["grant_role", "revoke_role"]},
         "user_id": {"type": "string"},
         "resource": {"type": "string", "enum": list(RESOURCES)},
-        "role": {"type": "string", "enum": ROLE_VALUES},
+        "role": {"type": "string", "enum": list(ROLES)},
     },
     "required": ["op", "user_id", "resource", "role"],
     "additionalProperties": False,
 }
 
 
+CREDENTIAL_OP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "op": {"type": "string", "enum": ["rotate_credential"]},
+        "user_id": {"type": "string"},
+        "resource": {"type": "string", "enum": list(RESOURCES)},
+    },
+    "required": ["op", "user_id", "resource"],
+    "additionalProperties": False,
+}
+
+
+OP_SCHEMA: dict[str, Any] = {"anyOf": [ROLE_OP_SCHEMA, CREDENTIAL_OP_SCHEMA]}
+
+# No ground-truth plan exceeds three operations. The bound exists so a runaway
+# generation terminates and is scored as a wrong answer instead of being
+# truncated by max_tokens and counted as a schema violation.
+MAX_OPS = 8
+
+
 PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "properties": {"ops": {"type": "array", "items": OP_SCHEMA}},
+    "properties": {
+        "ops": {"type": "array", "items": OP_SCHEMA, "maxItems": MAX_OPS}
+    },
     "required": ["ops"],
     "additionalProperties": False,
 }
@@ -114,14 +141,18 @@ def validate_classification(value: dict[str, Any]) -> str | None:
 def validate_op(value: Any) -> str | None:
     if not isinstance(value, dict):
         return "op_not_object"
-    if value.get("op") not in OP_TYPES:
+    op_type = value.get("op")
+    if op_type not in OP_TYPES:
         return "bad_op_type"
     user_id = value.get("user_id")
     if not isinstance(user_id, str) or not user_id.strip():
         return "bad_op_user_id"
     if value.get("resource") not in RESOURCES:
         return "bad_op_resource"
-    if value.get("role") not in ROLE_VALUES:
+    if op_type == "rotate_credential":
+        if value.get("role", "") != "":
+            return "bad_op_role"
+    elif value.get("role") not in ROLES:
         return "bad_op_role"
     return None
 
@@ -143,7 +174,8 @@ def validate_plan(value: dict[str, Any]) -> str | None:
 
 
 def canonical_op(op: dict[str, str]) -> tuple[str, str, str, str]:
-    return (op["op"], op["user_id"], op["resource"], op["role"])
+    """rotate_credential ops omit `role`; normalise it to "" for comparison."""
+    return (op["op"], op["user_id"], op["resource"], op.get("role", "") or "")
 
 
 def canonical_ops(ops: list[dict[str, str]]) -> set[tuple[str, str, str, str]]:

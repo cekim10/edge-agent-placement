@@ -7,6 +7,19 @@ from typing import Any
 from .schemas import canonical_ops
 
 
+CLASSIFICATION_KEYS = ("category", "subject", "resource", "role")
+
+
+def _norm(value: Any) -> Any:
+    """Canonicalise a field before exact comparison.
+
+    Case and surrounding whitespace on the free-text subject name are not part
+    of the answer, so they are normalised away. This is canonicalisation, not
+    fuzzy matching: every remaining character must still match.
+    """
+    return value.strip().casefold() if isinstance(value, str) else value
+
+
 def _state_key(state: dict[str, Any]) -> tuple[tuple[Any, ...], tuple[str, ...]]:
     roles = tuple(
         sorted((row["user_id"], row["resource"], row["role"]) for row in state.get("roles", []))
@@ -32,8 +45,8 @@ def score_instance(
     precision = len(intersection) / len(predicted_op_set) if predicted_op_set else 0.0
     recall = len(intersection) / len(expected_op_set) if expected_op_set else 1.0
     classification_correct = predicted_classification is not None and all(
-        predicted_classification.get(key) == expected_classification.get(key)
-        for key in ("category", "user_id", "resource", "role")
+        _norm(predicted_classification.get(key)) == _norm(expected_classification.get(key))
+        for key in CLASSIFICATION_KEYS
     )
     plan_exact = predicted_op_set == expected_op_set
     commit_correct = (

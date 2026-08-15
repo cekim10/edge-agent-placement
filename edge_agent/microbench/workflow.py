@@ -1,8 +1,20 @@
-"""Workflow runner for the access-control placement microbenchmark."""
+"""Workflow runner for the access-control placement microbenchmark.
+
+The workflow is classify -> plan -> commit. Verification is not a stage here; it
+is inserted between plan and commit as a decision variable by later experiments.
+
+The plan prompt states the operation vocabulary and the meaning of each request
+category, because without that the ground truth would be ambiguous. It does not
+state which operation belongs to the classified category, does not order the
+records so the answer comes first, and does not include the request text. What
+remains for the model is the actual work: resolve the subject name to a user_id
+and build the op set from the records.
+"""
 
 from __future__ import annotations
 
 import json
+import random
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -10,11 +22,30 @@ from typing import Any
 from edge_agent.client import ChatClient
 
 from .generator import AccessInstance
-from .schemas import CLASSIFY_SCHEMA, PLAN_SCHEMA, parse_json_object, validate_classification, validate_plan
+from .schemas import (
+    CLASSIFY_SCHEMA,
+    PLAN_SCHEMA,
+    parse_json_object,
+    validate_classification,
+    validate_plan,
+)
 from .service import AccessControlService
 
 
 MICRO_STAGES = ("classify", "plan")
+
+_PLAN_SPEC = (
+    "Operation vocabulary:",
+    "  grant_role(user_id, resource, role)",
+    "  revoke_role(user_id, resource, role)",
+    "  rotate_credential(user_id, resource) -- role must be the empty string",
+    "Request semantics:",
+    "  grant_access adds exactly the role named in the classification.",
+    "  revoke_access removes every role the subject currently holds on the resource.",
+    "  rotate_credential replaces the credential and changes no roles.",
+    "Resolve the subject's display name to a user_id using USERS; names may be similar.",
+    "Use only the listed records. Return {\"ops\": [...]} with one entry per mutation.",
+)
 
 
 @dataclass(frozen=True)
@@ -58,16 +89,33 @@ class MicroMockClient:
             raise ValueError("MicroMockClient requires incident")
         instance = AccessInstance(**incident)
         if stage == "classify":
-            if tier == "edge" and instance.a_level == "hard" and instance.instance_id.endswith(("0001", "0004", "0007")):
+            if (
+                tier == "edge"
+                and instance.a_level == "hard"
+                and instance.instance_id.endswith(("0001", "0004", "0007"))
+            ):
                 wrong = dict(instance.classification)
-                wrong["category"] = "grant_access" if wrong["category"] != "grant_access" else "revoke_access"
+                wrong["category"] = (
+                    "grant_access"
+                    if wrong["category"] != "grant_access"
+                    else "revoke_access"
+                )
                 return json.dumps(wrong)
             return json.dumps(instance.classification)
         if stage == "plan":
-            if tier == "edge" and instance.b_level == "hard" and instance.instance_id.endswith(("0002", "0005", "0008")):
-                return json.dumps(instance.invalid_plan["ops"][0])
             classification = _classification_from_messages(messages)
-            return json.dumps(_op_from_classification(classification))
+            propagated = any(
+                classification.get(key) != instance.classification.get(key)
+                for key in ("category", "subject", "resource", "role")
+            )
+            edge_plan_miss = (
+                tier == "edge"
+                and instance.b_level == "hard"
+                and instance.instance_id.endswith(("0002", "0005", "0008"))
+            )
+            if propagated or edge_plan_miss:
+                return json.dumps({"ops": instance.invalid_plans[0]["ops"]})
+            return json.dumps({"ops": instance.expected_ops})
         raise ValueError(stage)
 
 
@@ -86,7 +134,9 @@ def placement_name(placement: tuple[str, str]) -> str:
         return "all_cloud"
     if placement == ("edge", "edge"):
         return "all_edge"
-    return "edge_" + "_".join(stage for stage, tier in zip(MICRO_STAGES, placement) if tier == "edge")
+    return "edge_" + "_".join(
+        stage for stage, tier in zip(MICRO_STAGES, placement) if tier == "edge"
+    )
 
 
 def _messages(system: str, user: str) -> list[dict[str, str]]:
@@ -103,33 +153,24 @@ def _classification_from_messages(messages: list[dict[str, str]]) -> dict[str, A
     raise ValueError("classification missing from plan prompt")
 
 
-def _op_from_classification(classification: dict[str, Any]) -> dict[str, str]:
-    category_to_op = {
-        "grant_access": "grant_role",
-        "revoke_access": "revoke_role",
-        "rotate_credential": "rotate_credential",
-    }
-    return {
-        "op": category_to_op[str(classification["category"])],
-        "user_id": str(classification["user_id"]),
-        "resource": str(classification["resource"]),
-        "role": str(classification["role"]),
-    }
+def _record_view(instance: AccessInstance) -> tuple[str, str]:
+    """Render the record tables in a compact, deterministically shuffled order.
 
-
-def _candidate_records(instance: AccessInstance, limit: int = 24) -> list[dict[str, str]]:
-    target = {
-        "user_id": instance.classification["user_id"],
-        "resource": instance.classification["resource"],
-        "role": instance.classification["role"],
-    }
-    records = [target]
-    for row in instance.initial_state["roles"]:
-        if row != target and row not in records:
-            records.append(row)
-        if len(records) >= limit:
-            break
-    return records
+    The shuffle is seeded from the instance id so runs are reproducible while the
+    ground-truth rows land in an arbitrary position rather than first.
+    """
+    rng = random.Random(f"view:{instance.instance_id}")
+    users = list(instance.initial_state["users"])
+    assignments = list(instance.initial_state["roles"])
+    rng.shuffle(users)
+    rng.shuffle(assignments)
+    user_lines = "\n".join(
+        f"{user['user_id']}={user['display_name']}" for user in users
+    )
+    assignment_lines = "\n".join(
+        f"{row['user_id']}|{row['resource']}|{row['role']}" for row in assignments
+    )
+    return user_lines, assignment_lines
 
 
 def _classify_prompt(instance: AccessInstance) -> list[dict[str, str]]:
@@ -138,28 +179,30 @@ def _classify_prompt(instance: AccessInstance) -> list[dict[str, str]]:
         "\n".join(
             [
                 "Pick exactly one category: grant_access, revoke_access, rotate_credential.",
-                "Return category, user_id, resource, role, confidence.",
+                "Report the person named in the request as subject, the resource the "
+                "request acts on, and the role to grant.",
+                "role must be the empty string unless the category is grant_access.",
+                "Some requests mention a second resource only to say it must not change.",
                 f"REQUEST: {instance.request}",
             ]
         ),
     )
 
 
-def _plan_prompt(instance: AccessInstance, classification: dict[str, Any]) -> list[dict[str, str]]:
-    category_to_op = {
-        "grant_access": "grant_role",
-        "revoke_access": "revoke_role",
-        "rotate_credential": "rotate_credential",
-    }
+def _plan_prompt(
+    instance: AccessInstance, classification: dict[str, Any]
+) -> list[dict[str, str]]:
+    user_lines, assignment_lines = _record_view(instance)
     return _messages(
         "You plan access-control mutations. Return JSON only.",
         "\n".join(
             [
-                "Use only the supplied classification and candidate records.",
-                "Return exactly one operation object with keys op, user_id, resource, role.",
-                f"Allowed op for category: {category_to_op}",
+                *_PLAN_SPEC,
                 f"CLASSIFICATION: {json.dumps(classification, sort_keys=True)}",
-                f"CANDIDATE_RECORDS: {json.dumps(_candidate_records(instance), sort_keys=True)}",
+                "USERS:",
+                user_lines,
+                "ASSIGNMENTS (user_id|resource|role):",
+                assignment_lines,
             ]
         ),
     )
@@ -243,7 +286,7 @@ def run_micro_workflow(
             "predicted_ops": None,
         }
 
-    predicted_ops = [plan.parsed]
+    predicted_ops = list(plan.parsed["ops"])
     commit = service.commit(predicted_ops)
     return {
         "stages": [stage.to_dict() for stage in stages],

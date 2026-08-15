@@ -18,10 +18,10 @@ Observation 1 uses the first axis. The workflow is:
 classify -> plan -> commit
 ```
 
-`classify` produces the request category and target. `plan` receives only that
-stage state plus candidate records, then emits a set of operations. This makes a
-bad classification propagate structurally: downstream stages cannot silently
-recover by rereading the original request.
+`classify` produces the request category, subject and scope. `plan` receives only
+that stage state plus the record tables, never the original request text. This
+makes a bad classification propagate structurally: downstream stages cannot
+silently recover by rereading the request.
 
 Verification is not a fixed workflow stage. Later experiments insert it between
 `plan` and `commit` as a decision variable:
@@ -43,18 +43,51 @@ The generator emits three operation classes:
 For irreversible operations, `/compensate` must fail by contract. This is not a
 missing feature; it is the condition that makes speculation unavailable.
 
-## Initial Sweep
+## What Each Stage Must Actually Do
 
-The first implementation runs only Observation 1 with no network emulation:
+An earlier revision of this workload scored 100% in every cell for both models.
+The cause was not difficulty but construct validity: the plan prompt contained
+the category-to-operation mapping, the ground-truth record was always first in
+the candidate list, and the request text spelled out the `user_id` verbatim. The
+stages had no work left to do. The task content is now:
 
-```text
-A difficulty: easy, hard
-B difficulty: easy, hard
-instances/cell: 20
-placements: all_cloud, edge_classify, edge_plan, all_edge
-```
+`classify` reads only the request and must recover:
 
-Primary metrics:
+- the category, which in hard cells is implied ("their contract ended",
+  "the secret was posted in a public channel") rather than named;
+- the resource, where hard cells also mention a second resource inside a
+  negative clause that must not be acted on;
+- the role, which in hard cells is described by task ("needs to be able to push
+  changes to") rather than named.
+
+`plan` reads the classification and the record tables, and must:
+
+- resolve a display name to a `user_id`, against a user table that in hard cells
+  contains look-alike names (`Noor Kim` vs `Noor Kime` vs `Priya Kim`);
+- construct the op set, where `revoke_access` means every role the subject holds
+  on that resource, so hard cells need two or three operations rather than one;
+- work from a deterministically shuffled record list in which the ground-truth
+  rows sit in arbitrary positions.
+
+The plan prompt still states the operation vocabulary and what each category
+means, because without that the ground truth would be ambiguous. It does not
+state which operation belongs to the classified category.
+
+## Frozen Difficulty Grid
+
+This grid is fixed before measurement. Results are reported for every cell,
+including cells where no effect appears. If the phenomenon shows up in some
+cells and not others, that is the result; it is not a reason to reshape the
+workload.
+
+| Axis | easy | hard |
+| --- | --- | --- |
+| A (classify) | category, resource and role stated directly; one resource mentioned | intent implied; second resource in a negative clause; role given as a task description |
+| B (plan) | 12 users, 24 assignments, no look-alike names, revoke touches 1 role | 40 users incl. 3 look-alikes, 120 assignments, revoke touches 2-3 roles |
+
+Placements: `all_cloud`, `edge_classify`, `edge_plan`, `all_edge`.
+
+Primary metrics (binary):
 
 - `classification_accuracy`
 - `plan_exact_rate`
@@ -62,12 +95,28 @@ Primary metrics:
 - `end_to_end_success_rate`
 - `schema_violation_rate`
 
-Secondary metric:
+Secondary metrics (continuous, for analysis only):
 
 - `plan_partial_recall`
+- `plan_partial_precision`
 
-Do not tune the difficulty grid after seeing the result. If the phenomenon only
-appears in some cells, report those cells rather than reshaping the workload.
+`schema_violation_rate` must be 0 when guided decoding is on. A non-zero value is
+a harness bug, not a model result. Validators check only what guided decoding
+enforces, so a well-formed wrong answer is scored as wrong rather than as a
+schema violation.
+
+## Verifier Ground Truth
+
+Each instance carries a policy and two deliberately invalid plans, so verifier
+variants have something to catch and can be told apart:
+
+| Violation | Detectable by rule checker | Why |
+| --- | --- | --- |
+| `wrong_subject` | no | the ops are policy-clean; only intent reveals the wrong person was targeted |
+| `policy_forbidden_role` | yes | grants `admin` on a protected resource |
+
+This is what keeps `rule_local` honest as a baseline: it should be near-perfect
+on the second class and blind to the first.
 
 ## Running
 
@@ -86,8 +135,16 @@ EDGE_API_KIND=completions \
 CLOUD_API_KIND=completions \
 python3 scripts/run_micro_obs1.py \
   --instances-per-cell 20 \
-  --timeout-s 120 \
+  --timeout-s 180 \
   --classify-max-tokens 64 \
-  --plan-max-tokens 96
+  --plan-max-tokens 192
 ```
 
+Hard-cell plan prompts run to roughly 1.1k tokens, so serve both tiers with
+`--max-model-len 4096` or larger.
+
+`TCP_MSS_CLAMP` (default 1400) caps outgoing TCP segments because the cluster
+NICs advertise a 9000-byte MTU while the switch between the nodes only forwards
+1500-byte frames; without it any request larger than one segment hangs. The
+value used is recorded in each run's `manifest.json`. Set it to 0 once the
+network is fixed.

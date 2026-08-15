@@ -19,7 +19,12 @@ class AccessControlService:
     """Small stateful service with explicit compensation semantics."""
 
     def __init__(self) -> None:
-        self._state: dict[str, Any] = {"roles": [], "credentials": [], "audit": []}
+        self._state: dict[str, Any] = {
+            "users": [],
+            "roles": [],
+            "credentials": [],
+            "audit": [],
+        }
 
     def reset(self, state: dict[str, Any]) -> None:
         self._state = copy.deepcopy(state)
@@ -43,11 +48,13 @@ class AccessControlService:
                 roles.discard(key)
                 audit.append(f"revoke:{':'.join(key)}")
             elif op["op"] == "rotate_credential":
+                credentials.discard(f"active:{op['user_id']}:{op['resource']}")
                 credentials.add(f"rotated:{op['user_id']}:{op['resource']}")
                 audit.append(f"rotate:{op['user_id']}:{op['resource']}")
             else:
                 return CommitResult(applied=False, error=f"unknown_op:{op['op']}")
         self._state = {
+            "users": list(self._state.get("users", [])),
             "roles": [
                 {"user_id": user_id, "resource": resource, "role": role}
                 for user_id, resource, role in sorted(roles)

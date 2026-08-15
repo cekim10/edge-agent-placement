@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
@@ -36,6 +37,51 @@ DEFAULT_ENDPOINTS = {
 }
 
 
+def mss_clamp() -> int:
+    """Outgoing TCP segment cap, or 0 to leave the kernel default alone.
+
+    The cluster NICs advertise a 9000-byte MTU while the switch between the
+    nodes only forwards 1500-byte frames, so any request that does not fit in a
+    single segment is silently dropped and the connection hangs until it times
+    out. Lowering TCP_MAXSEG before connect is the only fix available without
+    root. Set TCP_MSS_CLAMP=0 once the network itself is corrected.
+    """
+    try:
+        value = int(os.environ.get("TCP_MSS_CLAMP", "1400").strip())
+    except ValueError:
+        return 0
+    return value if value > 0 else 0
+
+
+class _ClampedHTTPConnection(http.client.HTTPConnection):
+    mss: int = 0
+
+    def connect(self) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if self.mss:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, self.mss)
+        if isinstance(self.timeout, (int, float)):
+            sock.settimeout(self.timeout)
+        if self.source_address:
+            sock.bind(self.source_address)
+        sock.connect((self.host, self.port))
+        self.sock = sock
+
+
+class _ClampedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, mss: int) -> None:
+        super().__init__()
+        self._mss = mss
+
+    def http_open(self, req: Any) -> Any:
+        def factory(*args: Any, **kwargs: Any) -> _ClampedHTTPConnection:
+            connection = _ClampedHTTPConnection(*args, **kwargs)
+            connection.mss = self._mss
+            return connection
+
+        return self.do_open(factory, req)
+
+
 class ChatClient(Protocol):
     def chat(
         self,
@@ -64,6 +110,14 @@ class VLLMClient:
         self.max_tokens = max_tokens
         self.max_tokens_by_stage = max_tokens_by_stage or {}
         self._tokenizers: dict[str, Any] = {}
+        self.mss = mss_clamp()
+        self._opener = (
+            urllib.request.build_opener(_ClampedHTTPHandler(self.mss))
+            if self.mss
+            else urllib.request.build_opener()
+        )
+        if self.mss:
+            print(f"[client] TCP_MAXSEG clamped to {self.mss} bytes", flush=True)
 
     def _tokenizer_for_model(self, model: str) -> Any:
         tokenizer = self._tokenizers.get(model)
@@ -159,7 +213,7 @@ class VLLMClient:
         )
         started = time.perf_counter()
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
+            with self._opener.open(request, timeout=self.timeout_s) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except socket.timeout as exc:
             raise RuntimeError(

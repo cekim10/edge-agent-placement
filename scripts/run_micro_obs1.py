@@ -15,7 +15,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from edge_agent.client import build_client  # noqa: E402
+from edge_agent.client import build_client, mss_clamp  # noqa: E402
 from edge_agent.microbench.generator import generate_instances  # noqa: E402
 from edge_agent.microbench.scorer import aggregate, score_instance  # noqa: E402
 from edge_agent.microbench.service import AccessControlService  # noqa: E402
@@ -269,6 +269,7 @@ def main() -> int:
         "b_levels": args.b_levels,
         "instances_per_cell": args.instances_per_cell,
         "limit": args.limit,
+        "tcp_mss_clamp": mss_clamp(),
         "elapsed_s": time.perf_counter() - started,
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

@@ -88,6 +88,11 @@ dump showed the drop was instrumentation rather than reasoning:
 - Runaway plans were truncated by `max_tokens` and also landed in
   `schema_violation`. `maxItems` bounds the array so a runaway plan terminates
   and is scored as the wrong answer it is.
+- `guided_whitespace_pattern` turned out to be accepted and silently ignored by
+  the vLLM build in use: served output still arrives pretty-printed, at roughly
+  40 tokens per operation. The op-count bound and a 512-token plan budget are
+  what actually prevent truncation; the whitespace field is sent but not relied
+  on. `GUIDED_DECODING_BACKEND` can be set to try a backend that honours it.
 
 None of these changed the difficulty grid.
 
@@ -117,6 +122,15 @@ Secondary metrics (continuous, for analysis only):
 
 - `plan_partial_recall`
 - `plan_partial_precision`
+- `unrequested_destructive_rate`, `mean_unrequested_destructive_ops`
+
+The destructive-op metrics exist because of what the first clean run showed: on
+`grant_access` requests the 7B tier emitted the correct grant *and* a revoke
+nobody asked for, while the 32B tier did not. That is the failure the
+recoverability argument turns on -- the weaker tier does not merely miss, it
+adds destructive work, and once committed a spurious revoke is compensable at
+best and a spurious rotation is not recoverable at all. It is a finding, not an
+artifact, and must not be prompted away.
 
 `schema_violation_rate` must be 0 when guided decoding is on. A non-zero value is
 a harness bug, not a model result. Validators check only what guided decoding

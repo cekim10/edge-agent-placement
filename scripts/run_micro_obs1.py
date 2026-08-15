@@ -120,6 +120,9 @@ def run_label(
                         "plan_partial_precision": 0.0,
                         "plan_partial_recall": 0.0,
                         "commit_correct": False,
+                        "extra_op_count": 0,
+                        "unrequested_destructive_ops": 0,
+                        "any_unrequested_destructive": False,
                         "end_to_end_success": False,
                         "schema_violation": False,
                         "schema_error": None,
@@ -165,7 +168,7 @@ def main() -> int:
     parser.add_argument("--timeout-s", type=float, default=120.0)
     parser.add_argument("--max-tokens", type=int, default=128)
     parser.add_argument("--classify-max-tokens", type=int, default=64)
-    parser.add_argument("--plan-max-tokens", type=int, default=256)
+    parser.add_argument("--plan-max-tokens", type=int, default=512)
     parser.add_argument("--mock", action="store_true")
     args = parser.parse_args()
 
@@ -230,6 +233,8 @@ def main() -> int:
             "end_to_end_success_rate",
             "schema_violation_rate",
             "plan_partial_recall",
+            "unrequested_destructive_rate",
+            "mean_unrequested_destructive_ops",
             "placement",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -252,6 +257,8 @@ def main() -> int:
             "end_to_end_success_rate",
             "schema_violation_rate",
             "plan_partial_recall",
+            "unrequested_destructive_rate",
+            "mean_unrequested_destructive_ops",
             "placement",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

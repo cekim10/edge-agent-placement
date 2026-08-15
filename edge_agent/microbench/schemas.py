@@ -54,7 +54,7 @@ ROLE_OP_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "op": {"type": "string", "enum": ["grant_role", "revoke_role"]},
-        "user_id": {"type": "string"},
+        "user_id": {"type": "string", "maxLength": 8},
         "resource": {"type": "string", "enum": list(RESOURCES)},
         "role": {"type": "string", "enum": list(ROLES)},
     },
@@ -67,7 +67,7 @@ CREDENTIAL_OP_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "op": {"type": "string", "enum": ["rotate_credential"]},
-        "user_id": {"type": "string"},
+        "user_id": {"type": "string", "maxLength": 8},
         "resource": {"type": "string", "enum": list(RESOURCES)},
     },
     "required": ["op", "user_id", "resource"],
@@ -79,8 +79,9 @@ OP_SCHEMA: dict[str, Any] = {"anyOf": [ROLE_OP_SCHEMA, CREDENTIAL_OP_SCHEMA]}
 
 # No ground-truth plan exceeds three operations. The bound exists so a runaway
 # generation terminates and is scored as a wrong answer instead of being
-# truncated by max_tokens and counted as a schema violation.
-MAX_OPS = 8
+# truncated by max_tokens and counted as a schema violation. A model that wants
+# to emit more is still wrong; it is simply wrong within a bounded budget.
+MAX_OPS = 4
 
 
 PLAN_SCHEMA: dict[str, Any] = {

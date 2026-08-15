@@ -56,13 +56,26 @@ def mss_clamp() -> int:
 def guided_whitespace_pattern() -> str | None:
     """Whitespace the guided-decoding grammar may emit between JSON tokens.
 
-    The backend default allows unbounded whitespace, and the 7B model exploits
-    it: it emits the object's fields and then runs newlines and tabs until
-    max_tokens, leaving unparseable JSON that scores as a schema violation
-    rather than as a wrong answer. Set GUIDED_WHITESPACE_PATTERN="" to disable
-    if a server rejects the field.
+    The backend default allows unbounded whitespace, and the model spends its
+    budget on it: pretty-printed output costs roughly 40 tokens per operation
+    and runs into max_tokens, leaving unparseable JSON that scores as a schema
+    violation rather than as a wrong answer.
+
+    Not every vLLM build honours this field -- some accept and ignore it, which
+    is silent. Verify against a served model before trusting it, and treat the
+    op-count bound and the token budget as the real defences. Set
+    GUIDED_WHITESPACE_PATTERN="" to stop sending it.
     """
     return os.environ.get("GUIDED_WHITESPACE_PATTERN", "[ ]?") or None
+
+
+def guided_decoding_backend() -> str | None:
+    """Optional backend selector, e.g. "xgrammar:disable-any-whitespace".
+
+    Left unset by default because the accepted values differ across vLLM
+    versions and a wrong value fails the whole run.
+    """
+    return os.environ.get("GUIDED_DECODING_BACKEND", "") or None
 
 
 class _ClampedHTTPConnection(http.client.HTTPConnection):
@@ -124,6 +137,7 @@ class VLLMClient:
         self._tokenizers: dict[str, Any] = {}
         self.mss = mss_clamp()
         self.whitespace_pattern = guided_whitespace_pattern()
+        self.decoding_backend = guided_decoding_backend()
         self._opener = (
             urllib.request.build_opener(_ClampedHTTPHandler(self.mss))
             if self.mss
@@ -176,6 +190,8 @@ class VLLMClient:
                 payload["guided_json"] = guided_json
                 if self.whitespace_pattern:
                     payload["guided_whitespace_pattern"] = self.whitespace_pattern
+                if self.decoding_backend:
+                    payload["guided_decoding_backend"] = self.decoding_backend
             return (
                 endpoint.base_url.rstrip("/") + "/chat/completions",
                 payload,
@@ -196,6 +212,8 @@ class VLLMClient:
                 payload["guided_json"] = guided_json
                 if self.whitespace_pattern:
                     payload["guided_whitespace_pattern"] = self.whitespace_pattern
+                if self.decoding_backend:
+                    payload["guided_decoding_backend"] = self.decoding_backend
             return (
                 endpoint.base_url.rstrip("/") + "/completions",
                 payload,

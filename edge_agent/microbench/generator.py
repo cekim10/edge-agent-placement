@@ -393,7 +393,14 @@ def generate_instances(
     if b_level not in CELL_SHAPE:
         raise ValueError("b_level must be easy or hard")
 
-    rng = random.Random(f"{seed}:{a_level}:{b_level}")
+    # Seeded on b_level only, deliberately. `a_level` changes nothing but the
+    # wording of the request, so seeding on it too would redraw the users,
+    # resources, records and target as well, and an A:easy-vs-A:hard comparison
+    # would confound the wording change with a fresh sample. Excluding it makes
+    # the A axis a *paired* comparison: the two cells are the same instances
+    # asked two ways, which is both fairer and far lower variance at small n.
+    # `b_level` must stay in the seed -- it changes the record set by design.
+    rng = random.Random(f"{seed}:{b_level}")
     categories = list(CATEGORY_TO_OP)
     instances = [
         _build_instance(

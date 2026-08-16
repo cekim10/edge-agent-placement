@@ -150,6 +150,66 @@ variants have something to catch and can be told apart:
 This is what keeps `rule_local` honest as a baseline: it should be near-perfect
 on the second class and blind to the first.
 
+## Observation 2: verification as a decision variable
+
+Difficulty and stage placement are held fixed (defaults: cell A=hard/B=hard,
+placement `all_edge`); the sweep is over which verifier runs and where.
+
+| Variant | Where | What it can see |
+| --- | --- | --- |
+| `none` | -- | commit whatever the planner produced |
+| `rule_local` | on device, no model call | the written policy only |
+| `llm_edge` | edge tier | request, policy, proposed ops, record tables |
+| `llm_cloud` | cloud tier | same as `llm_edge` |
+
+`llm_edge` and `llm_cloud` differ only in placement, so latency between them is
+a network fact and accuracy between them is a capacity fact.
+
+### Where the negatives come from
+
+A competent planner leaves a verifier almost nothing to catch, so verifier
+accuracy measured on the natural distribution alone is close to meaningless.
+`--inject-rate` replaces that fraction of plans with a generator-supplied
+invalid plan, split evenly between the two violation classes. The plan call is
+still made, so the pipeline's shape and measured latency are unchanged.
+
+The label is the same either way: **a plan deserves approval exactly when its op
+set equals the ground truth**. Injection only controls how many negatives there
+are and what kind.
+
+### Latency and RTT
+
+Accuracy does not depend on RTT -- same prompts, same models, temperature 0 --
+so the sweep runs once per variant and latency is projected:
+
+```text
+latency(rtt) = measured_latency + cloud_calls * rtt
+```
+
+This is arithmetic over measured per-call latency and a measured count of calls
+that crossed to the cloud tier, exact for a sequential pipeline. It is not
+simulated model quality. `tc netem` is not available on the cluster (no root),
+so `--inject-rtt-ms` exists to validate the projection against real injected
+delay rather than to replace it.
+
+Under placement `all_edge` the classify and plan calls cost no RTT and
+`llm_cloud` adds exactly one crossing, which is what makes a crossover appear:
+`llm_cloud` buys detection accuracy at one RTT, and past some RTT that price
+exceeds what the safety constraint is worth.
+
+### Metrics
+
+- `detection_recall` -- of the plans that should have been stopped, how many were
+- `false_reject_rate` -- correct plans wrongly blocked
+- `unsafe_commit_rate` -- the safety constraint is written against this
+- `detection_by_class` -- `rule_local` should be near 1.0 on
+  `policy_forbidden_role` and near 0.0 on `wrong_subject`; it is precise and
+  inexpressive by construction, and that contrast is why it is in the sweep
+
+A verifier that fails to return a usable answer defaults to approving, so a
+broken verifier reads as permissive rather than silently protective.
+`verifier_failure_rate` counts those separately.
+
 ## Running
 
 Smoke test without GPUs:
@@ -174,6 +234,16 @@ python3 scripts/run_micro_obs1.py \
 
 Hard-cell plan prompts run to roughly 1.1k tokens, so serve both tiers with
 `--max-model-len 4096` or larger.
+
+Observation 2:
+
+```bash
+python3 scripts/run_micro_obs2_verification.py --mock --instances 12   # smoke test
+
+EDGE_MODEL=<edge-model> CLOUD_MODEL=<cloud-model> \
+EDGE_API_KIND=completions CLOUD_API_KIND=completions \
+python3 scripts/run_micro_obs2_verification.py --instances 20 --inject-rate 0.5
+```
 
 `TCP_MSS_CLAMP` (default 1400) caps outgoing TCP segments because the cluster
 NICs advertise a 9000-byte MTU while the switch between the nodes only forwards

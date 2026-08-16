@@ -114,6 +114,50 @@ def report_plan(records: list[dict[str, Any]], label: str, limit: int) -> None:
         print(line)
 
 
+def report_cells(records: list[dict[str, Any]], label: str) -> None:
+    """Failure modes broken out by difficulty cell.
+
+    The aggregate cannot explain why a cell scores the way it does. If one cell
+    fails through a different mechanism than another, the difficulty axis is not
+    a single ordered thing and the grid should not be read as a gradient.
+    """
+    cells: dict[tuple[str, str], Counter[str]] = {}
+    totals: Counter[tuple[str, str]] = Counter()
+    destructive: dict[tuple[str, str], list[int]] = {}
+    for record in records:
+        instance = record["instance"]
+        key = (instance["a_level"], instance["b_level"])
+        totals[key] += 1
+        destructive.setdefault(key, []).append(
+            record["score"].get("unrequested_destructive_ops", 0)
+        )
+        if record["score"].get("schema_violation") or record["score"].get("no_output"):
+            cells.setdefault(key, Counter())["schema_violation"] += 1
+            continue
+        expected = _ops_key(instance["expected_ops"])
+        predicted = _ops_key((record.get("workflow") or {}).get("predicted_ops"))
+        mode = _diff_label(expected, predicted)
+        category = instance["classification"]["category"]
+        tag = "match" if mode == "match" else f"{category}:{mode}"
+        cells.setdefault(key, Counter())[tag] += 1
+
+    print(f"\n### {label}: failure modes by cell")
+    for key in sorted(cells):
+        n = totals[key]
+        modes = cells[key]
+        matched = modes.get("match", 0)
+        extra = destructive.get(key, [])
+        mean_extra = sum(extra) / len(extra) if extra else 0.0
+        print(
+            f"  A {key[0]:<5} B {key[1]:<5} n={n:<4} exact={matched}/{n} "
+            f"incorrect_irreversible_ops={mean_extra:.2f}"
+        )
+        for tag, count in modes.most_common():
+            if tag == "match":
+                continue
+            print(f"      {tag:<40s} {count}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path, nargs="?")
@@ -138,6 +182,7 @@ def main() -> int:
         if args.only_label and label != args.only_label:
             continue
         report_schema(records, label, args.limit)
+        report_cells(records, label)
         report_plan(records, label, args.limit)
     return 0
 

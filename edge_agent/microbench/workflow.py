@@ -119,6 +119,16 @@ class MicroMockClient:
             if propagated or edge_plan_miss:
                 return json.dumps({"ops": instance.invalid_plans[0]["ops"]})
             return json.dumps({"ops": instance.expected_ops})
+        if stage == "verify":
+            ops = _ops_from_messages(messages)
+            correct = _canonical(ops) == _canonical(instance.expected_ops)
+            # Cloud audits correctly. Edge misses a third of the bad plans, so
+            # the aggregation distinguishes verifier tiers during smoke tests.
+            if not correct and tier == "edge" and instance.instance_id.endswith(("0000", "0003", "0006")):
+                correct = True
+            return json.dumps(
+                {"approved": correct, "reason": "mock_ok" if correct else "mock_mismatch"}
+            )
         raise ValueError(stage)
 
 
@@ -156,7 +166,23 @@ def _classification_from_messages(messages: list[dict[str, str]]) -> dict[str, A
     raise ValueError("classification missing from plan prompt")
 
 
-def _record_view(instance: AccessInstance) -> tuple[str, str]:
+def _ops_from_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    marker = "PROPOSED_OPS: "
+    for message in messages:
+        content = message.get("content", "")
+        if marker in content:
+            return json.loads(content.split(marker, 1)[1].split("\n", 1)[0])
+    raise ValueError("proposed ops missing from verify prompt")
+
+
+def _canonical(ops: list[dict[str, str]]) -> set[tuple[str, str, str, str]]:
+    return {
+        (op["op"], op["user_id"], op["resource"], op.get("role", "") or "")
+        for op in ops
+    }
+
+
+def record_view(instance: AccessInstance) -> tuple[str, str]:
     """Render the record tables in a compact, deterministically shuffled order.
 
     The shuffle is seeded from the instance id so runs are reproducible while the
@@ -195,7 +221,7 @@ def _classify_prompt(instance: AccessInstance) -> list[dict[str, str]]:
 def _plan_prompt(
     instance: AccessInstance, classification: dict[str, Any]
 ) -> list[dict[str, str]]:
-    user_lines, assignment_lines = _record_view(instance)
+    user_lines, assignment_lines = record_view(instance)
     return _messages(
         "You plan access-control mutations. Return JSON only.",
         "\n".join(
@@ -246,7 +272,16 @@ def run_micro_workflow(
     service: AccessControlService,
     instance: AccessInstance,
     placement: tuple[str, str],
+    verifier: Any = None,
+    injected_ops: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
+    """Run classify -> plan -> [verify] -> commit for one instance.
+
+    `verifier` is optional and gates the commit: a rejected plan is not applied.
+    `injected_ops` replaces the planner's output after the plan call has been
+    made, so controlled bad plans can be fed to the verifier without changing
+    the pipeline's shape or its measured latency.
+    """
     incident = instance.to_dict()
     service.reset(instance.initial_state)
     stages: list[StageRecord] = []
@@ -265,8 +300,11 @@ def run_micro_workflow(
         return {
             "stages": [stage.to_dict() for stage in stages],
             "commit": {"applied": False, "error": "classification_failed"},
+            "verify": None,
+            "committed": False,
             "final_state": service.state(),
             "predicted_classification": classify.parsed,
+            "planned_ops": None,
             "predicted_ops": None,
         }
 
@@ -284,17 +322,38 @@ def run_micro_workflow(
         return {
             "stages": [stage.to_dict() for stage in stages],
             "commit": {"applied": False, "error": "plan_failed"},
+            "verify": None,
+            "committed": False,
             "final_state": service.state(),
             "predicted_classification": classify.parsed,
+            "planned_ops": None,
             "predicted_ops": None,
         }
 
-    predicted_ops = list(plan.parsed["ops"])
+    planned_ops = list(plan.parsed["ops"])
+    predicted_ops = list(injected_ops) if injected_ops is not None else planned_ops
+
+    verify = verifier(predicted_ops) if verifier is not None else None
+    if verify is not None and not verify.approved:
+        return {
+            "stages": [stage.to_dict() for stage in stages],
+            "commit": {"applied": False, "error": "rejected_by_verifier"},
+            "verify": verify.to_dict(),
+            "committed": False,
+            "final_state": service.state(),
+            "predicted_classification": classify.parsed,
+            "planned_ops": planned_ops,
+            "predicted_ops": predicted_ops,
+        }
+
     commit = service.commit(predicted_ops)
     return {
         "stages": [stage.to_dict() for stage in stages],
         "commit": commit.__dict__,
+        "verify": verify.to_dict() if verify is not None else None,
+        "committed": True,
         "final_state": service.state(),
         "predicted_classification": classify.parsed,
+        "planned_ops": planned_ops,
         "predicted_ops": predicted_ops,
     }

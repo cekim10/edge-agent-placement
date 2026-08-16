@@ -123,6 +123,7 @@ def run_label(
                         "extra_op_count": 0,
                         "unrequested_destructive_ops": 0,
                         "any_unrequested_destructive": False,
+                        "expected_destructive_ops": 0,
                         "end_to_end_success": False,
                         "schema_violation": False,
                         "schema_error": None,
@@ -235,6 +236,7 @@ def main() -> int:
             "plan_partial_recall",
             "unrequested_destructive_rate",
             "mean_unrequested_destructive_ops",
+            "mean_expected_destructive_ops",
             "placement",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -259,6 +261,7 @@ def main() -> int:
             "plan_partial_recall",
             "unrequested_destructive_rate",
             "mean_unrequested_destructive_ops",
+            "mean_expected_destructive_ops",
             "placement",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

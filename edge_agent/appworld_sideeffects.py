@@ -42,6 +42,12 @@ VERB_CLASSES: tuple[tuple[str, str], ...] = (
     ("create_transaction", "irreversible"),
     ("settle_", "irreversible"),
     ("checkout", "irreversible"),
+    # A payment request moves no money, but it appears in another person's
+    # account the moment it is made, so the effect has left this agent's
+    # control. Same reasoning as send_*. Confirm against the AppWorld API docs
+    # if splitwise turns out to expose a cancel for it.
+    ("request_payment", "irreversible"),
+    ("remind_", "irreversible"),
     # compensable: an inverse call plausibly exists
     ("create_", "compensable"),
     ("add_", "compensable"),

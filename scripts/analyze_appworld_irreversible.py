@@ -116,7 +116,12 @@ def summarise(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("run_dir", type=Path, nargs="?")
+    parser.add_argument(
+        "run_dir", type=Path, nargs="*",
+        help="one or more run directories; placements from all of them are "
+             "pooled, so a reference run and a later edge run can be compared "
+             "without re-running the reference",
+    )
     parser.add_argument(
         "--reference-label", default="all_cloud",
         help="placement whose trajectory is the per-task reference for excess",
@@ -127,19 +132,34 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    run_dir = args.run_dir
-    if run_dir is None:
+    run_dirs = list(args.run_dir)
+    if not run_dirs:
         candidates = sorted((ROOT / "outputs").glob("appworld_observation1_*"))
         if not candidates:
             print("no appworld_observation1_* run directories found")
             return 1
-        run_dir = candidates[-1]
-    print(f"run: {run_dir}")
+        run_dirs = [candidates[-1]]
 
-    runs = load_run(run_dir)
+    runs: dict[str, list[dict[str, Any]]] = {}
+    for directory in run_dirs:
+        print(f"run: {directory}")
+        for label, rows in load_run(directory).items():
+            if label in runs:
+                # Same placement in two directories would silently average two
+                # different experiments, so keep them apart by directory.
+                label = f"{label}@{directory.name}"
+            runs[label] = rows
     if not runs:
         print("no .jsonl records found")
         return 1
+    run_dir = run_dirs[-1]
+
+    if len(runs) == 1:
+        print(
+            f"\nonly one placement present ({next(iter(runs))}). The comparison "
+            "this metric exists for needs at least two -- run the same task ids "
+            "with --only-placement all_edge and pass both directories."
+        )
 
     profiles = {
         label: profile_label(rows, include_harness=args.include_harness_stages)

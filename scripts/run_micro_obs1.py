@@ -88,6 +88,7 @@ def run_label(
                     actual_final_state=workflow["final_state"],
                     schema_error=_schema_error(workflow),
                     output_error=_schema_error(workflow),
+                    initial_state=instance.initial_state,
                 )
                 ok = not score["schema_violation"] and not score["no_output"]
                 record = {
@@ -124,6 +125,8 @@ def run_label(
                         "unrequested_destructive_ops": 0,
                         "any_unrequested_destructive": False,
                         "expected_destructive_ops": 0,
+                        "effective_destructive_ops": 0,
+                        "any_effective_destructive": False,
                         "end_to_end_success": False,
                         "schema_violation": False,
                         "schema_error": None,
@@ -237,6 +240,8 @@ def main() -> int:
             "unrequested_destructive_rate",
             "mean_unrequested_destructive_ops",
             "mean_expected_destructive_ops",
+            "effective_destructive_rate",
+            "mean_effective_destructive_ops",
             "placement",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -262,6 +267,8 @@ def main() -> int:
             "unrequested_destructive_rate",
             "mean_unrequested_destructive_ops",
             "mean_expected_destructive_ops",
+            "effective_destructive_rate",
+            "mean_effective_destructive_ops",
             "placement",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

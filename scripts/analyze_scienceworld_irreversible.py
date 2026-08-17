@@ -60,6 +60,9 @@ def summarise(label: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
             / max(1, sum(p["steps"] for _, p in profiles))
         ),
         "irrev_per_episode": (sum(irreversible) / n) if n else 0.0,
+        "commit_per_episode": (
+            sum(p["executed_commit"] for _, p in profiles) / n if n else 0.0
+        ),
         "attempted_irrev_per_episode": (
             sum(p["attempted_irreversible"] for _, p in profiles) / n if n else 0.0
         ),
@@ -104,7 +107,7 @@ def main() -> int:
 
     header = (
         f"{'placement':<26}{'n':>4}{'score':>8}{'success':>9}{'steps':>7}"
-        f"{'invalid':>9}{'irrev/ep':>10}{'irrev/pt':>10}{'unclass':>9}"
+        f"{'invalid':>9}{'destroy/ep':>12}{'commit/ep':>11}{'irrev/pt':>10}{'unclass':>9}"
     )
     print("\n" + header)
     print("-" * len(header))
@@ -114,14 +117,15 @@ def main() -> int:
         print(
             f"{row['label']:<26}{row['n']:>4}{row['avg_normalized_score']:>8.3f}"
             f"{row['success_rate']:>9.3f}{row['avg_steps']:>7.1f}"
-            f"{row['invalid_action_rate']:>9.3f}{row['irrev_per_episode']:>10.2f}"
+            f"{row['invalid_action_rate']:>9.3f}{row['irrev_per_episode']:>12.2f}"
+            f"{row['commit_per_episode']:>11.2f}"
             f"{ratio_text}{row['unclassified_per_episode']:>9.2f}"
         )
 
     # Which verbs actually produced the count. A single verb dominating means the
     # metric is measuring that verb, not "destruction" -- and `focus on` is a
     # judgement call, so it has to be visible rather than folded into a total.
-    print("\nirreversible actions taken, by placement:")
+    print("\nphysically irreversible actions (destruction), by placement:")
     for label, records in runs.items():
         verbs: Counter[str] = Counter()
         for record in records:

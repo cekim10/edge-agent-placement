@@ -551,7 +551,14 @@ def messages_for_appworld_stage(
     user_email = str(task_info.supervisor.get("email", ""))
 
     system = "You are a deterministic AppWorld agent."
+    # "Write a complete program" is not a hint about the answer; it describes how
+    # the harness runs the code. Without it the model writes a continuation of
+    # the snippet it was shown and the block dies on line 1 with a NameError
+    # against a variable that was never defined -- which is what happened in
+    # 13/20 all_cloud blocks, before a single API call could execute.
     appworld_rules = (
+        "Write one complete, self-contained program. It runs in a fresh namespace: "
+        "define every variable you use, and never reference names from earlier code. "
         "Use only apis.<app>.<api>(...). No imports. "
         "Never use bare spotify or fake top/recent APIs. "
         "End with apis.supervisor.complete_task(answer=...)."

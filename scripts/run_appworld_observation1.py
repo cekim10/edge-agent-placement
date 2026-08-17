@@ -195,6 +195,41 @@ def main() -> int:
             flush=True,
         )
 
+    # Which endpoints and models produced this run. Without it a later run
+    # cannot be compared against this one -- the numbers would be attributed to
+    # a placement when the difference might be a model that was swapped between
+    # the two runs.
+    from edge_agent.client import DEFAULT_ENDPOINTS  # noqa: PLC0415
+
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "dataset_name": args.dataset_name,
+                "limit": args.limit,
+                "task_ids": task_ids,
+                "mock": bool(args.mock),
+                "endpoints": {
+                    tier: {
+                        "base_url": endpoint.base_url,
+                        "model": endpoint.model,
+                        "api_kind": endpoint.api_kind,
+                    }
+                    for tier, endpoint in DEFAULT_ENDPOINTS.items()
+                },
+                "max_tokens_by_stage": {
+                    "task_analysis": args.analysis_max_tokens,
+                    "api_doc_lookup": args.api_plan_max_tokens,
+                    "code_generation": args.code_max_tokens,
+                    "execution_verification": args.verify_max_tokens,
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
     metrics_path = run_dir / "metrics.json"
     metrics_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     csv_path = run_dir / "metrics.csv"

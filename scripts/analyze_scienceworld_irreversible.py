@@ -118,6 +118,21 @@ def main() -> int:
             f"{ratio_text}{row['unclassified_per_episode']:>9.2f}"
         )
 
+    # Which verbs actually produced the count. A single verb dominating means the
+    # metric is measuring that verb, not "destruction" -- and `focus on` is a
+    # judgement call, so it has to be visible rather than folded into a total.
+    print("\nirreversible actions taken, by placement:")
+    for label, records in runs.items():
+        verbs: Counter[str] = Counter()
+        for record in records:
+            for action, count in episode_action_profile(
+                record.get("steps", [])
+            )["irreversible_multiset"].items():
+                verbs[action.split()[0] if action.split() else action] += count
+        total = sum(verbs.values())
+        detail = ", ".join(f"{verb}={count}" for verb, count in verbs.most_common()) or "(none)"
+        print(f"  {label:<26} total={total:<4} {detail}")
+
     unknown: Counter[str] = Counter()
     for records in runs.values():
         for record in records:

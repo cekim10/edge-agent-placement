@@ -199,6 +199,7 @@ def main() -> int:
     # cannot be compared against this one -- the numbers would be attributed to
     # a placement when the difference might be a model that was swapped between
     # the two runs.
+    from edge_agent.appworld_harness import oracle_helpers_enabled  # noqa: PLC0415
     from edge_agent.client import DEFAULT_ENDPOINTS  # noqa: PLC0415
 
     (run_dir / "manifest.json").write_text(
@@ -208,6 +209,7 @@ def main() -> int:
                 "limit": args.limit,
                 "task_ids": task_ids,
                 "mock": bool(args.mock),
+                "oracle_helpers_enabled": oracle_helpers_enabled(),
                 "endpoints": {
                     tier: {
                         "base_url": endpoint.base_url,

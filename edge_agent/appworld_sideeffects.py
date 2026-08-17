@@ -78,6 +78,20 @@ EXCLUDED_APPS = frozenset({"api_docs", "supervisor"})
 # Stages whose code the harness writes itself, so it is not the model's doing.
 HARNESS_STAGES = frozenset({"api_doc_lookup", "deterministic_spotify_helper"})
 
+# The stage label is not enough. The hand-written Spotify solver is recorded
+# under stage "code_generation" on the path that runs it before any model call,
+# so filtering by stage name alone would credit the harness's API calls to the
+# model. These markers appear only in harness-authored code.
+HARNESS_CODE_MARKERS = (
+    "def add_song_ids_from(",
+    "def score_from(*records)",
+    "apis.api_docs.show_api_doc",
+)
+
+
+def is_harness_code(code: str) -> bool:
+    return any(marker in (code or "") for marker in HARNESS_CODE_MARKERS)
+
 
 def classify_endpoint(endpoint: str) -> str:
     name = endpoint.lower()
@@ -111,7 +125,9 @@ def task_call_profile(
     irreversible: Counter[tuple[str, str]] = Counter()
     unclassified: Counter[tuple[str, str]] = Counter()
     for record in execution_outputs or []:
-        if not include_harness_stages and record.get("stage") in HARNESS_STAGES:
+        if not include_harness_stages and (
+            record.get("stage") in HARNESS_STAGES or is_harness_code(record.get("code", ""))
+        ):
             continue
         for app, endpoint in extract_calls(record.get("code", "")):
             label = classify_endpoint(endpoint)

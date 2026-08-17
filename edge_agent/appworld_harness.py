@@ -325,7 +325,22 @@ def _spotify_top_genre_spec(task_info: AppWorldTaskInfo, results: list[AppWorldS
     return None
 
 
+def oracle_helpers_enabled() -> bool:
+    """Whether hand-written task-specific solvers may run. Off by default.
+
+    `_spotify_top_genre_solver_code` is a complete hand-written solution for one
+    family of Spotify tasks. When it fires the model contributes nothing, so it
+    inflates success rate, attributes its own API calls to the model, and -- worst
+    for a placement study -- runs identically on every tier, erasing the very
+    difference the experiment measures. Set APPWORLD_ORACLE_HELPERS=1 only for
+    debugging the pipeline, never for a reported run.
+    """
+    return os.environ.get("APPWORLD_ORACLE_HELPERS", "0").strip() not in {"", "0", "false", "False"}
+
+
 def _spotify_top_genre_solver_code(task_info: AppWorldTaskInfo, results: list[AppWorldStageResult]) -> str:
+    if not oracle_helpers_enabled():
+        return ""
     spec = _spotify_top_genre_spec(task_info, results)
     if spec is None:
         return ""

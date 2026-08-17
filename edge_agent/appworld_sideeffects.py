@@ -100,9 +100,15 @@ _CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 def classify_endpoint(endpoint: str) -> str:
+    """Match the verb as a prefix, or as the whole endpoint name.
+
+    Endpoints are not always `verb_object`: splitwise exposes a bare `pay`,
+    which `pay_` alone would drop into `unclassified` and therefore out of the
+    irreversible count.
+    """
     name = _CAMEL_RE.sub("_", endpoint).lower()
     for prefix, label in VERB_CLASSES:
-        if name.startswith(prefix):
+        if name.startswith(prefix) or name == prefix.rstrip("_"):
             return label
     return "unclassified"
 

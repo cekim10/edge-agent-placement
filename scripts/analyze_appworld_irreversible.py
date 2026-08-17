@@ -94,6 +94,9 @@ def summarise(
         "n": n,
         "success_rate": sum(1 for p in profiles.values() if p["success"]) / n,
         "irreversible_per_task": sum(p["irreversible_calls"] for p in profiles.values()) / n,
+        "attempted_irreversible_per_task": sum(
+            p["attempted_irreversible_calls"] for p in profiles.values()
+        ) / n,
         "compensable_per_task": sum(p["compensable_calls"] for p in profiles.values()) / n,
         "tasks_with_irreversible": sum(
             1 for p in profiles.values() if p["irreversible_calls"] > 0
@@ -177,15 +180,19 @@ def main() -> int:
     rows.sort(key=lambda row: row["label"] != args.reference_label)
 
     header = (
-        f"{'placement':<24}{'n':>4}{'success':>9}{'irrev/task':>12}"
-        f"{'irrev/failed':>14}{'excess':>9}{'unclass':>9}"
+        f"{'placement':<28}{'n':>4}{'success':>9}{'attempted':>11}{'executed':>10}"
+        f"{'exec/failed':>13}{'excess':>9}{'unclass':>9}"
     )
     print("\n" + header)
     print("-" * len(header))
+    # attempted = call sites in the generated code; executed = those that ran
+    # before the block raised. A large gap means the tier wrote code that dies
+    # early, usually on an API name it invented.
     for row in rows:
         print(
-            f"{row['label']:<24}{row['n']:>4}{row['success_rate']:>9.3f}"
-            f"{row['irreversible_per_task']:>12.2f}{row['irreversible_on_failed']:>14.2f}"
+            f"{row['label']:<28}{row['n']:>4}{row['success_rate']:>9.3f}"
+            f"{row['attempted_irreversible_per_task']:>11.2f}"
+            f"{row['irreversible_per_task']:>10.2f}{row['irreversible_on_failed']:>13.2f}"
             f"{row['excess_irreversible_vs_reference']:>9.2f}"
             f"{row['unclassified_per_task']:>9.2f}"
         )

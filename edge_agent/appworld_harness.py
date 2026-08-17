@@ -12,6 +12,13 @@ import os
 import re
 import time
 import traceback
+
+# AppWorld freezes the clock inside its context manager so the simulated world
+# has a fixed "today". That patch also covers time.perf_counter, which is why
+# every stage latency measured inside `with AppWorld(...)` came back as exactly
+# 0.0 while the same call timed 1.6s outside it. Bind the real function here, at
+# import, before the environment replaces the module attribute.
+_perf_counter = time.perf_counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -720,12 +727,12 @@ def run_appworld_workflow(
                             flush=True,
                         )
                         stages.append(AppWorldStageResult(stage=stage, tier=tier, latency_s=0.0, output=generated_code))
-                        exec_started = time.perf_counter()
+                        exec_started = _perf_counter()
                         exec_output = world.execute(generated_code)
                         execution_outputs.append(
                             {
                                 "stage": stage,
-                                "latency_s": time.perf_counter() - exec_started,
+                                "latency_s": _perf_counter() - exec_started,
                                 "code": generated_code,
                                 "output": str(exec_output),
                             }
@@ -736,32 +743,32 @@ def run_appworld_workflow(
                     output = _doc_lookup_code(_apps_for_task(task_info, stages))
                     print(f"  stage_done stage={stage} tier={tier} latency_s=0.00 output_chars={len(output)}", flush=True)
                     stages.append(AppWorldStageResult(stage=stage, tier=tier, latency_s=0.0, output=output))
-                    exec_started = time.perf_counter()
+                    exec_started = _perf_counter()
                     exec_output = world.execute(output)
                     execution_outputs.append(
                         {
                             "stage": stage,
-                            "latency_s": time.perf_counter() - exec_started,
+                            "latency_s": _perf_counter() - exec_started,
                             "code": output,
                             "output": str(exec_output),
                         }
                     )
                     stages.append(AppWorldStageResult(stage="api_doc_output", tier="local", latency_s=0.0, output=str(exec_output)))
                     continue
-                started = time.perf_counter()
+                started = _perf_counter()
                 output = client.chat(tier=tier, stage=stage, messages=messages, incident=task_info.to_incident())
-                latency_s = time.perf_counter() - started
+                latency_s = _perf_counter() - started
                 print(f"  stage_done stage={stage} tier={tier} latency_s={latency_s:.2f} output_chars={len(output)}", flush=True)
                 stages.append(AppWorldStageResult(stage=stage, tier=tier, latency_s=latency_s, output=output))
 
                 if stage == "code_generation":
                     generated_code = _sanitize_appworld_code(_extract_code(output), _apps_for_task(task_info, stages))
-                    exec_started = time.perf_counter()
+                    exec_started = _perf_counter()
                     exec_output = world.execute(generated_code)
                     execution_outputs.append(
                         {
                             "stage": stage,
-                            "latency_s": time.perf_counter() - exec_started,
+                            "latency_s": _perf_counter() - exec_started,
                             "code": generated_code,
                             "output": str(exec_output),
                         }
@@ -770,12 +777,12 @@ def run_appworld_workflow(
                 elif stage == "execution_verification":
                     repair_code = _sanitize_appworld_code(_extract_code(output), _apps_for_task(task_info, stages))
                     if repair_code:
-                        exec_started = time.perf_counter()
+                        exec_started = _perf_counter()
                         exec_output = world.execute(repair_code)
                         execution_outputs.append(
                             {
                                 "stage": stage,
-                                "latency_s": time.perf_counter() - exec_started,
+                                "latency_s": _perf_counter() - exec_started,
                                 "code": repair_code,
                                 "output": str(exec_output),
                             }
@@ -785,12 +792,12 @@ def run_appworld_workflow(
                         helper_code = _spotify_top_genre_solver_code(task_info, stages)
                         if helper_code:
                             repair_code = helper_code
-                            exec_started = time.perf_counter()
+                            exec_started = _perf_counter()
                             exec_output = world.execute(helper_code)
                             execution_outputs.append(
                                 {
                                     "stage": "deterministic_spotify_helper",
-                                    "latency_s": time.perf_counter() - exec_started,
+                                    "latency_s": _perf_counter() - exec_started,
                                     "code": helper_code,
                                     "output": str(exec_output),
                                 }

@@ -35,7 +35,12 @@ sys.path.insert(0, str(ROOT))
 
 from edge_agent.appworld_harness import evaluation_success  # noqa: E402
 from edge_agent.appworld_sideeffects import (  # noqa: E402
+    HARNESS_STAGES,
+    classify_endpoint,
     excess_irreversible,
+    executed_line_limit,
+    extract_calls,
+    is_harness_code,
     task_call_profile,
 )
 
@@ -117,6 +122,41 @@ def summarise(
     }
 
 
+def report_execution_health(runs: dict[str, list[dict[str, Any]]]) -> None:
+    """How far the generated code got before it raised.
+
+    The irreversible counts are meaningless until code actually runs: a block
+    that dies on line 1 touches nothing, so every placement reads as zero and
+    the comparison silently has no content. Print this first, always.
+    """
+    print(
+        f"\n{'placement':<28}{'blocks':>7}{'ran':>6}{'died':>6}"
+        f"{'died@1':>8}  calls in blocks that ran"
+    )
+    print("-" * 78)
+    for label, rows in runs.items():
+        ran = died = died_first = 0
+        calls: Counter[str] = Counter()
+        for row in rows:
+            for record in row.get("execution_outputs", []) or []:
+                if record.get("stage") in HARNESS_STAGES or is_harness_code(
+                    record.get("code", "")
+                ):
+                    continue
+                limit = executed_line_limit(record.get("output"))
+                if limit is None:
+                    ran += 1
+                    for _app, endpoint in extract_calls(record.get("code", "")):
+                        calls[classify_endpoint(endpoint)] += 1
+                else:
+                    died += 1
+                    died_first += limit == 1
+        summary = ", ".join(f"{k}={v}" for k, v in sorted(calls.items())) or "(none)"
+        print(
+            f"{label:<28}{ran + died:>7}{ran:>6}{died:>6}{died_first:>8}  {summary}"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -163,6 +203,8 @@ def main() -> int:
             "this metric exists for needs at least two -- run the same task ids "
             "with --only-placement all_edge and pass both directories."
         )
+
+    report_execution_health(runs)
 
     profiles = {
         label: profile_label(rows, include_harness=args.include_harness_stages)

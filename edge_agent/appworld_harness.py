@@ -11,6 +11,7 @@ import json
 import os
 import re
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -789,11 +790,15 @@ def run_appworld_workflow(
                             )
                             evaluation = _evaluation_to_dict(world)
     except Exception as exc:
+        # A one-line repr hides where the failure came from -- AppWorld internals,
+        # the client, or this harness -- and every task then reports the same
+        # opaque string. Keep the traceback so the first failure is diagnosable.
+        traceback.print_exc()
         return AppWorldTaskResult(
             task_id=task_id,
             placement=placement,
             ok=False,
-            error=repr(exc),
+            error=f"{exc!r}\n{traceback.format_exc()}",
             stages=stages,
             generated_code=generated_code,
             repair_code=repair_code,

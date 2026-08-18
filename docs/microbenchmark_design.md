@@ -210,6 +210,63 @@ A verifier that fails to return a usable answer defaults to approving, so a
 broken verifier reads as permissive rather than silently protective.
 `verifier_failure_rate` counts those separately.
 
+## Observation 3: the commit barrier
+
+Two axes; difficulty, placement and verifier are held fixed (`hard/hard`,
+`all_edge`, `llm_cloud` -- the only verifier variant that both detects reliably
+and does not block most correct plans).
+
+| Policy | Order |
+| --- | --- |
+| `conservative` | plan -> verify -> commit |
+| `speculative` | plan -> commit, verify in parallel, compensate on reject |
+
+| Class | Operation | Compensation | Speculation |
+| --- | --- | --- | --- |
+| reversible | `grant_role` | cheap inverse | latency win, no damage |
+| compensable | `revoke_role` | inverse costs a round trip | **the crossover lives here** |
+| irreversible | `rotate_credential` | fails by contract | permanent damage |
+
+`irreversible + speculative` is skipped by default: the configuration is
+*unavailable*, not merely worse, so a figure must show a missing curve rather
+than a bad one. `--force-speculative-irreversible` runs it anyway and turns that
+absence into a measured count of unrecoverable violations.
+
+### What is measured, and what is composed
+
+State is measured. The speculative path really commits before the verdict and
+really calls compensation after it, so the three outcomes -- `correct`,
+`restored`, `damaged` -- are observed per instance. Execution is sequential
+rather than threaded: the verifier judges the *plan*, so its verdict cannot
+depend on whether the commit has landed, which makes the sequential final state
+identical to true concurrency.
+
+Latency is composed from measured components:
+
+```text
+conservative(rtt) = plan + (verify + rtt) + commit_if_approved
+speculative(rtt)  = plan + max(commit, verify + rtt) + compensate_if_rejected
+```
+
+The `max` assumes perfect uncontended overlap and nothing else. Re-running per
+RTT would reproduce identical verdicts, since no prompt or decision depends on
+RTT.
+
+Commit is not free: `--commit-latency-ms` (default 50) is one round trip to the
+service. Speculation can only hide a cost that exists, so at zero it is a no-op
+by construction. The value is recorded in the manifest.
+
+### Compensation must undo what happened, not the inverse of what was asked
+
+The first implementation applied the inverse of the requested operations, and
+`compensable + speculative` came out with 83% of states damaged while
+compensation reported success. Revoking a role the subject never held is a
+no-op; granting it back invents a role that never existed. The service now
+records the delta each commit actually produced and compensation reverses
+exactly that. `recovery_success_rate` is scored over the commits compensation
+was *invoked* on, so a conservative policy reports `nan` -- it had nothing to
+recover -- rather than 0, which would read as a failure to recover.
+
 ## Running
 
 Smoke test without GPUs:
@@ -243,6 +300,17 @@ python3 scripts/run_micro_obs2_verification.py --mock --instances 12   # smoke t
 EDGE_MODEL=<edge-model> CLOUD_MODEL=<cloud-model> \
 EDGE_API_KIND=completions CLOUD_API_KIND=completions \
 python3 scripts/run_micro_obs2_verification.py --instances 20 --inject-rate 0.5
+```
+
+Observation 3:
+
+```bash
+python3 scripts/run_micro_obs3_commit_barrier.py --mock --instances-per-class 6
+
+EDGE_MODEL=<edge-model> CLOUD_MODEL=<cloud-model> \
+python3 scripts/run_micro_obs3_commit_barrier.py \
+  --instances-per-class 20 --commit-latency-ms 50 \
+  --force-speculative-irreversible
 ```
 
 `TCP_MSS_CLAMP` (default 1400) caps outgoing TCP segments because the cluster

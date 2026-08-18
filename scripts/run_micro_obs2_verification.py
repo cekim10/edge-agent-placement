@@ -16,9 +16,9 @@ is then exact arithmetic, not a model:
 
     latency(rtt) = measured_latency + cloud_calls * rtt
 
-This is projection over measured data, not simulated model quality. Use
---inject-rtt-ms to have the client actually sleep instead, to confirm the
-projection against a real run.
+This is projection over measured data, not simulated model quality. It is
+exact only because this pipeline is strictly sequential; Observation 3, where
+commit and verification overlap, composes latency differently.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import random
 import sys
 import time
 from datetime import datetime
@@ -38,6 +37,11 @@ sys.path.insert(0, str(ROOT))
 
 from edge_agent.client import build_client, mss_clamp  # noqa: E402
 from edge_agent.microbench.generator import generate_instances  # noqa: E402
+from edge_agent.microbench.injection import (  # noqa: E402
+    INJECTION_CLASSES,
+    injected_ops_for,
+    injection_for,
+)
 from edge_agent.microbench.scorer import (  # noqa: E402
     aggregate_verification,
     score_verification,
@@ -52,31 +56,7 @@ from edge_agent.microbench.workflow import (  # noqa: E402
 )
 
 PLACEMENT_CHOICES = ("all_cloud", "classify", "plan", "all_edge")
-INJECTION_CLASSES = ("natural", "wrong_subject", "policy_forbidden_role")
 DEFAULT_RTT_MS = "0,10,25,50,100,200"
-
-
-def injection_for(instance: Any, rate: float) -> str:
-    """Pick this instance's plan source deterministically.
-
-    Seeded from the instance id rather than its index so the choice does not
-    correlate with the request category, which cycles by index.
-    """
-    if rate <= 0:
-        return "natural"
-    rng = random.Random(f"inject:{instance.instance_id}")
-    if rng.random() >= rate:
-        return "natural"
-    return rng.choice(["wrong_subject", "policy_forbidden_role"])
-
-
-def injected_ops_for(instance: Any, violation: str) -> list[dict[str, str]] | None:
-    if violation == "natural":
-        return None
-    for plan in instance.invalid_plans:
-        if plan["violation"] == violation:
-            return list(plan["ops"])
-    raise ValueError(f"instance has no invalid plan for {violation}")
 
 
 def _latency(workflow: dict[str, Any]) -> tuple[float, int]:

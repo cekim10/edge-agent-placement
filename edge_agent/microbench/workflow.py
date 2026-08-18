@@ -29,7 +29,7 @@ from .schemas import (
     validate_classification,
     validate_plan,
 )
-from .service import AccessControlService
+from .service import AccessControlService, CommitResult
 
 
 MICRO_STAGES = ("classify", "plan")
@@ -266,6 +266,83 @@ def _call_json_stage(
     return StageRecord(stage, tier, latency, output, parsed, validation_error)
 
 
+COMMIT_POLICIES = ("conservative", "speculative")
+
+
+def run_commit_barrier_workflow(
+    *,
+    client: ChatClient,
+    service: AccessControlService,
+    instance: AccessInstance,
+    placement: tuple[str, str],
+    verifier: Any,
+    policy: str,
+    injected_ops: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """classify -> plan -> commit, ordered by the commit policy.
+
+    conservative  verify, then commit only if approved.
+    speculative   commit immediately, verify in parallel, compensate on reject.
+
+    The speculative path is executed sequentially (commit, then verify, then
+    compensate) rather than with real threads. The verifier judges the *plan*,
+    so its verdict cannot depend on whether the commit has landed, which makes
+    the final state of the sequential order identical to true concurrency. State
+    and recoverability outcomes are therefore measured, not modelled; only the
+    latency composition assumes the overlap, and it is composed from measured
+    component times by the runner.
+    """
+    if policy not in COMMIT_POLICIES:
+        raise ValueError(f"unknown commit policy: {policy}")
+
+    stages, classify, plan, failure = _run_plan_stages(
+        client=client, service=service, instance=instance, placement=placement
+    )
+    if failure is not None:
+        return {**failure, "policy": policy}
+
+    assert plan is not None and classify is not None
+    planned_ops = list(plan.parsed["ops"])
+    predicted_ops = list(injected_ops) if injected_ops is not None else planned_ops
+
+    initial_state = service.state()
+    compensation: dict[str, Any] | None = None
+
+    if policy == "conservative":
+        verify = verifier(predicted_ops)
+        commit = (
+            service.commit(predicted_ops)
+            if verify.approved
+            else CommitResult(applied=False, error="rejected_by_verifier")
+        )
+    else:
+        commit = service.commit(predicted_ops)
+        verify = verifier(predicted_ops)
+        if not verify.approved:
+            result = service.compensate(predicted_ops, instance.recoverability)
+            compensation = {
+                "invoked": True,
+                "supported": result.compensation_supported,
+                "applied": result.compensation_applied,
+                "error": result.error,
+                "latency_s": result.latency_s,
+            }
+
+    return {
+        "policy": policy,
+        "stages": [stage.to_dict() for stage in stages],
+        "commit": commit.__dict__,
+        "verify": verify.to_dict(),
+        "committed": bool(commit.applied),
+        "compensation": compensation,
+        "initial_state": initial_state,
+        "final_state": service.state(),
+        "predicted_classification": classify.parsed,
+        "planned_ops": planned_ops,
+        "predicted_ops": predicted_ops,
+    }
+
+
 def run_micro_workflow(
     *,
     client: ChatClient,
@@ -282,53 +359,12 @@ def run_micro_workflow(
     made, so controlled bad plans can be fed to the verifier without changing
     the pipeline's shape or its measured latency.
     """
-    incident = instance.to_dict()
-    service.reset(instance.initial_state)
-    stages: list[StageRecord] = []
-
-    classify = _call_json_stage(
-        client=client,
-        tier=placement[0],
-        stage="classify",
-        messages=_classify_prompt(instance),
-        schema=CLASSIFY_SCHEMA,
-        incident=incident,
-        validator=validate_classification,
+    stages, classify, plan, failure = _run_plan_stages(
+        client=client, service=service, instance=instance, placement=placement
     )
-    stages.append(classify)
-    if classify.error is not None or classify.parsed is None:
-        return {
-            "stages": [stage.to_dict() for stage in stages],
-            "commit": {"applied": False, "error": "classification_failed"},
-            "verify": None,
-            "committed": False,
-            "final_state": service.state(),
-            "predicted_classification": classify.parsed,
-            "planned_ops": None,
-            "predicted_ops": None,
-        }
-
-    plan = _call_json_stage(
-        client=client,
-        tier=placement[1],
-        stage="plan",
-        messages=_plan_prompt(instance, classify.parsed),
-        schema=PLAN_SCHEMA,
-        incident=incident,
-        validator=validate_plan,
-    )
-    stages.append(plan)
-    if plan.error is not None or plan.parsed is None:
-        return {
-            "stages": [stage.to_dict() for stage in stages],
-            "commit": {"applied": False, "error": "plan_failed"},
-            "verify": None,
-            "committed": False,
-            "final_state": service.state(),
-            "predicted_classification": classify.parsed,
-            "planned_ops": None,
-            "predicted_ops": None,
-        }
+    if failure is not None:
+        return failure
+    assert classify is not None and plan is not None
 
     planned_ops = list(plan.parsed["ops"])
     predicted_ops = list(injected_ops) if injected_ops is not None else planned_ops
@@ -357,3 +393,61 @@ def run_micro_workflow(
         "planned_ops": planned_ops,
         "predicted_ops": predicted_ops,
     }
+
+
+def _run_plan_stages(
+    *,
+    client: ChatClient,
+    service: AccessControlService,
+    instance: AccessInstance,
+    placement: tuple[str, str],
+) -> tuple[list[StageRecord], StageRecord | None, StageRecord | None, dict[str, Any] | None]:
+    """Run classify then plan, resetting the service state first.
+
+    Returns (stages, classify, plan, failure). `failure` is a ready-to-return
+    workflow dict when a stage produced nothing usable, so every experiment
+    reports the same shape for the same breakage.
+    """
+    incident = instance.to_dict()
+    service.reset(instance.initial_state)
+    stages: list[StageRecord] = []
+
+    def broken(reason: str, classified: StageRecord | None) -> dict[str, Any]:
+        return {
+            "stages": [stage.to_dict() for stage in stages],
+            "commit": {"applied": False, "error": reason},
+            "verify": None,
+            "committed": False,
+            "final_state": service.state(),
+            "predicted_classification": classified.parsed if classified else None,
+            "planned_ops": None,
+            "predicted_ops": None,
+        }
+
+    classify = _call_json_stage(
+        client=client,
+        tier=placement[0],
+        stage="classify",
+        messages=_classify_prompt(instance),
+        schema=CLASSIFY_SCHEMA,
+        incident=incident,
+        validator=validate_classification,
+    )
+    stages.append(classify)
+    if classify.error is not None or classify.parsed is None:
+        return stages, classify, None, broken("classification_failed", classify)
+
+    plan = _call_json_stage(
+        client=client,
+        tier=placement[1],
+        stage="plan",
+        messages=_plan_prompt(instance, classify.parsed),
+        schema=PLAN_SCHEMA,
+        incident=incident,
+        validator=validate_plan,
+    )
+    stages.append(plan)
+    if plan.error is not None or plan.parsed is None:
+        return stages, classify, None, broken("plan_failed", classify)
+
+    return stages, classify, plan, None

@@ -71,6 +71,7 @@ from edge_agent.microbench.workflow import (  # noqa: E402
 
 RECOVERABILITY_CLASSES = ("reversible", "compensable", "irreversible")
 DEFAULT_RTT_MS = "0,10,25,50,100,200,500"
+DEFAULT_COMMIT_SWEEP_MS = "10,50,200,500,1000"
 
 
 def _components(workflow: dict[str, Any]) -> dict[str, float]:
@@ -88,13 +89,38 @@ def _components(workflow: dict[str, Any]) -> dict[str, float]:
     }
 
 
-def latency_at(components: dict[str, float], policy: str, rtt_s: float) -> float:
-    """Compose end-to-end latency for one instance at a given RTT."""
+def latency_at(
+    components: dict[str, float],
+    policy: str,
+    rtt_s: float,
+    commit_s: float,
+    *,
+    approved: bool,
+    compensated: bool,
+) -> float:
+    """Compose one instance's latency for either policy.
+
+    Both policies are composed from the *same* measured components, taken from a
+    single execution. Running them separately and comparing wall clock does not
+    work: the policy difference is tens of milliseconds while run-to-run LLM
+    latency varies by more than that, so the comparison measured server noise.
+
+    `commit_s` is substituted rather than measured, because it is a declared
+    deployment parameter (the service round trip) and is the axis worth
+    sweeping. RTT is not: verification crosses the network under both policies,
+    so both curves have slope 1 in RTT and can never cross. What speculation
+    hides is the commit, so the crossover lives in commit cost.
+
+    Compensation costs one more service round trip when it runs at all. For an
+    irreversible operation it refuses immediately and costs nothing -- which is
+    why speculation there is both the cheapest option and the only one that
+    leaves permanent damage.
+    """
     upstream = components["t_stages"] + components["stage_cloud_calls"] * rtt_s
     verify = components["t_verify"] + components["verify_crosses"] * rtt_s
     if policy == "conservative":
-        return upstream + verify + components["t_commit"]
-    return upstream + max(components["t_commit"], verify) + components["t_compensate"]
+        return upstream + verify + (commit_s if approved else 0.0)
+    return upstream + max(commit_s, verify) + (commit_s if compensated else 0.0)
 
 
 def select_instances(
@@ -221,6 +247,11 @@ def main() -> int:
     parser.add_argument("--commit-latency-ms", type=float, default=50.0)
     parser.add_argument("--rtt-ms", default=DEFAULT_RTT_MS)
     parser.add_argument(
+        "--commit-latency-sweep-ms", default=DEFAULT_COMMIT_SWEEP_MS,
+        help="commit round trips to compose latency over; this, not RTT, is the "
+             "axis where the policies cross",
+    )
+    parser.add_argument(
         "--force-speculative-irreversible", action="store_true",
         help="run speculation on irreversible operations, which cannot be undone. "
              "Turns the absent curve into a measured count of permanent damage.",
@@ -240,6 +271,9 @@ def main() -> int:
         b_level=args.b_level,
     )
     rtt_ms = [float(v) for v in args.rtt_ms.split(",") if v.strip()]
+    commit_sweep_ms = [
+        float(v) for v in args.commit_latency_sweep_ms.split(",") if v.strip()
+    ]
     commit_latency_s = args.commit_latency_ms / 1000.0
     placement = placement_for_edge_stage(args.placement)
 
@@ -304,23 +338,48 @@ def main() -> int:
                 flush=True,
             )
 
+    # Paired latency: both policies composed from the speculative cell's
+    # components, which is the only run that exercises commit and compensation
+    # on every instance and therefore carries every component both policies
+    # need. Same instances, same measured times, so the difference between the
+    # curves is the policy and nothing else.
     latency_rows = []
-    for cell in cells:
-        for rtt in rtt_ms:
-            values = [
-                latency_at(record["components"], cell["policy"], rtt / 1000.0)
-                for record in cell["_records"]
-            ]
-            latency_rows.append(
-                {
-                    "recoverability": cell["recoverability"],
-                    "policy": cell["policy"],
-                    "rtt_ms": rtt,
-                    "mean_latency_s": sum(values) / len(values) if values else 0.0,
-                    "unrecoverable_violation_rate": cell["unrecoverable_violation_rate"],
-                    "n": cell["n"],
-                }
-            )
+    by_class = {
+        cell["recoverability"]: cell
+        for cell in cells
+        if cell["policy"] == "speculative"
+    }
+    for recoverability, cell in by_class.items():
+        for commit_ms in commit_sweep_ms:
+            for rtt in rtt_ms:
+                for policy in COMMIT_POLICIES:
+                    values = [
+                        latency_at(
+                            record["components"],
+                            policy,
+                            rtt / 1000.0,
+                            commit_ms / 1000.0,
+                            approved=bool(record["score"]["approved"]),
+                            compensated=bool(record["score"]["compensation_applied"]),
+                        )
+                        for record in cell["_records"]
+                    ]
+                    latency_rows.append(
+                        {
+                            "recoverability": recoverability,
+                            "policy": policy,
+                            "commit_ms": commit_ms,
+                            "rtt_ms": rtt,
+                            "mean_latency_s": sum(values) / len(values) if values else 0.0,
+                            "unrecoverable_violation_rate": (
+                                cell["unrecoverable_violation_rate"]
+                                if policy == "speculative"
+                                else 0.0
+                            ),
+                            "reject_rate": 1.0 - cell["approved_rate"],
+                            "n": cell["n"],
+                        }
+                    )
 
     summary_fields = [
         "label", "recoverability", "policy", "n", "plan_correct_rate", "approved_rate",
@@ -359,10 +418,13 @@ def main() -> int:
                 "inject_rate": args.inject_rate,
                 "commit_latency_ms": args.commit_latency_ms,
                 "rtt_ms": rtt_ms,
+                "commit_latency_sweep_ms": commit_sweep_ms,
                 "force_speculative_irreversible": bool(args.force_speculative_irreversible),
                 "tcp_mss_clamp": mss_clamp(),
-                "latency_note": "state measured; latency composed from measured "
-                                "components assuming perfect uncontended overlap",
+                "latency_note": "state measured; latency composed from the "
+                                "speculative run's measured components for both "
+                                "policies (paired), with commit cost substituted "
+                                "and perfect uncontended overlap assumed",
                 "elapsed_s": time.perf_counter() - started,
             },
             indent=2,

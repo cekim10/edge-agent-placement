@@ -102,9 +102,14 @@ class AccessControlService:
         pays when the verdict comes back no.
         """
         started = time.perf_counter()
-        if recoverability == "irreversible" or any(
-            op["op"] == "rotate_credential" for op in ops
-        ):
+        # Feasibility is decided by the operations that were actually committed,
+        # not by the request's recoverability label. The two can diverge: an
+        # injected policy violation replaces a credential rotation with a role
+        # grant, which is trivially reversible, and refusing it on the strength
+        # of the label alone reported damage as unrecoverable when it was not.
+        # `recoverability` is kept for the audit trail only.
+        del recoverability
+        if any(op["op"] == "rotate_credential" for op in ops):
             # Fails by contract and costs nothing: a rotated credential is
             # already outside this system's control, so there is no operation to
             # attempt and nothing to recover.

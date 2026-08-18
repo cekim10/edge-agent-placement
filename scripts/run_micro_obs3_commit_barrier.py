@@ -51,6 +51,10 @@ sys.path.insert(0, str(ROOT))
 from edge_agent.client import build_client, mss_clamp  # noqa: E402
 from edge_agent.microbench.generator import generate_instances  # noqa: E402
 from edge_agent.microbench.injection import injected_ops_for, injection_for  # noqa: E402
+
+# Only bad plans that keep the executed operation in the cell's
+# recoverability class; see injection.injection_for.
+OBS3_INJECTION_CLASSES = ("wrong_subject",)
 from edge_agent.microbench.scorer import (  # noqa: E402
     aggregate_commit_barrier,
     score_commit_barrier,
@@ -132,7 +136,7 @@ def run_cell(
 
     with path.open("w", encoding="utf-8") as handle:
         for index, instance in enumerate(instances, start=1):
-            violation = injection_for(instance, inject_rate)
+            violation = injection_for(instance, inject_rate, OBS3_INJECTION_CLASSES)
             try:
                 workflow = run_commit_barrier_workflow(
                     client=client,

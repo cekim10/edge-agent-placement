@@ -27,7 +27,7 @@ from typing import Any, Callable
 
 from edge_agent.client import ChatClient
 
-from .generator import AccessInstance
+from .generator import ROLE_TASK_PHRASE, AccessInstance
 from .schemas import VERIFY_SCHEMA, parse_json_object
 
 
@@ -76,15 +76,30 @@ def _verify_prompt(
     user_lines, assignment_lines = record_view
     policy = instance.policy
     system = "You audit proposed access-control changes. Return JSON only."
+    # The verifier judges role correctness, so it needs the same vocabulary the
+    # request is written in. Without it, hard requests phrase the role as a
+    # capability ("manage members and settings") and the auditor rejects the
+    # matching role name as excessive -- it was asked to check a mapping it was
+    # never given, while the planner receives the role directly from the
+    # classification. Imported from the generator so the two cannot drift.
+    role_glossary = "; ".join(
+        f"{role} = {phrase.removeprefix('needs to be able to ')}"
+        for role, phrase in sorted(ROLE_TASK_PHRASE.items())
+    )
     body = "\n".join(
         [
             "Approve the plan only if it does exactly what the request asks and",
             "breaks no policy rule. Reject it otherwise.",
+            f"Role meanings: {role_glossary}.",
             "Check all of the following:",
             "  - the operations target the person named in the request, not a",
-            "    similarly named one;",
+            "    similarly named one. Similar names merely existing in USERS is",
+            "    not a defect: reject only if the chosen user_id belongs to",
+            "    someone other than the person the request names;",
             "  - the operations act on the resource the request names, and leave",
             "    any resource the request excludes untouched;",
+            "  - granting access adds exactly the one role the request calls for,",
+            "    and removes nothing;",
             "  - revoking access removes every role that person holds on that",
             "    resource, no more and no fewer;",
             "  - no operation grants "

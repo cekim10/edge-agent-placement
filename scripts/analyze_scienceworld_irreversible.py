@@ -72,6 +72,20 @@ def summarise(label: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         "episodes_with_irrev": (
             sum(1 for value in irreversible if value > 0) / n if n else 0.0
         ),
+        "commit_rate": sum(1.0 for _, p in profiles if p["committed"]) / n if n else 0.0,
+        # Of the episodes that committed, how many were punished for it.
+        "wrong_commit_rate": (
+            sum(1.0 for _, p in profiles if p["wrong_commit"])
+            / max(1, sum(1 for _, p in profiles if p["committed"]))
+        ),
+        # Steps of evidence gathered before spending the irreversible action.
+        "mean_steps_before_commit": (
+            sum(p["first_commit_step"] for _, p in profiles if p["committed"])
+            / max(1, sum(1 for _, p in profiles if p["committed"]))
+        ),
+        "mean_final_score": (
+            sum(float(row.get("final_score") or 0.0) for row, _ in profiles) / n if n else 0.0
+        ),
         "unclassified_per_episode": (
             sum(p["unclassified_actions"] for _, p in profiles) / n if n else 0.0
         ),
@@ -107,19 +121,18 @@ def main() -> int:
 
     header = (
         f"{'placement':<26}{'n':>4}{'score':>8}{'success':>9}{'steps':>7}"
-        f"{'invalid':>9}{'destroy/ep':>12}{'commit/ep':>11}{'irrev/pt':>10}{'unclass':>9}"
+        f"{'final':>9}{'commit%':>9}{'wrong%':>8}{'step@commit':>13}"
+        f"{'destroy/ep':>12}{'unclass':>9}"
     )
     print("\n" + header)
     print("-" * len(header))
     for row in rows:
-        ratio = row["irrev_per_point"]
-        ratio_text = "  n/a" if ratio != ratio else f"{ratio:>10.2f}"
         print(
             f"{row['label']:<26}{row['n']:>4}{row['avg_normalized_score']:>8.3f}"
             f"{row['success_rate']:>9.3f}{row['avg_steps']:>7.1f}"
-            f"{row['invalid_action_rate']:>9.3f}{row['irrev_per_episode']:>12.2f}"
-            f"{row['commit_per_episode']:>11.2f}"
-            f"{ratio_text}{row['unclassified_per_episode']:>9.2f}"
+            f"{row['mean_final_score']:>9.1f}{row['commit_rate']:>9.2f}"
+            f"{row['wrong_commit_rate']:>8.2f}{row['mean_steps_before_commit']:>13.1f}"
+            f"{row['irrev_per_episode']:>12.2f}{row['unclassified_per_episode']:>9.2f}"
         )
 
     # Which verbs actually produced the count. A single verb dominating means the

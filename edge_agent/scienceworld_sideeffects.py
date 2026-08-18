@@ -97,6 +97,8 @@ def episode_action_profile(steps: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """
     executed: Counter[str] = Counter()
     attempted: Counter[str] = Counter()
+    first_commit_step: int | None = None
+    commit_reward: float | None = None
     irreversible_actions: Counter[str] = Counter()
     commit_actions: Counter[str] = Counter()
     unclassified: Counter[str] = Counter()
@@ -113,6 +115,13 @@ def episode_action_profile(steps: Iterable[dict[str, Any]]) -> dict[str, Any]:
             irreversible_actions[re.sub(r"\s+", " ", action.strip().lower())] += 1
         elif label == COMMIT:
             commit_actions[re.sub(r"\s+", " ", action.strip().lower())] += 1
+            if first_commit_step is None:
+                # ScienceWorld ends the episode on a wrong `focus on` and scores
+                # it -100, so the first commit is usually the only one and its
+                # reward is the whole outcome. How many steps of evidence the
+                # agent gathered before spending it is the interesting number.
+                first_commit_step = int(step.get("step_index") or 0)
+                commit_reward = float(step.get("reward") or 0.0)
         elif label == "unclassified":
             unclassified[re.sub(r"\s+", " ", action.strip().lower())] += 1
     return {
@@ -124,6 +133,10 @@ def episode_action_profile(steps: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "attempted_commit": attempted.get(COMMIT, 0),
         "executed_compensable": executed.get("compensable", 0),
         "unclassified_actions": executed.get("unclassified", 0),
+        "first_commit_step": first_commit_step,
+        "commit_reward": commit_reward,
+        "committed": first_commit_step is not None,
+        "wrong_commit": commit_reward is not None and commit_reward < 0,
         "irreversible_multiset": irreversible_actions,
         "commit_multiset": commit_actions,
         "unclassified_multiset": unclassified,

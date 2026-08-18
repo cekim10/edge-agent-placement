@@ -176,6 +176,7 @@ def run_cell(
                 "ok": True,
                 "label": label,
                 "instance_id": instance.instance_id,
+                "instance": instance.to_dict(),
                 "injected": violation,
                 "components": components,
                 "workflow": workflow,
@@ -320,7 +321,8 @@ def main() -> int:
     summary_fields = [
         "label", "recoverability", "policy", "n", "plan_correct_rate", "approved_rate",
         "commit_rate", "state_correct_rate", "state_damaged_rate",
-        "unrecoverable_violation_rate", "rejected_n", "compensation_invoked_n",
+        "unrecoverable_violation_rate", "policy_induced_damage_rate",
+        "rejected_n", "compensation_invoked_n",
         "recovery_success_rate",
         "mean_compensation_latency_s",
     ]

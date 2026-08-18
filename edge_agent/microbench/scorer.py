@@ -265,12 +265,19 @@ def score_commit_barrier(
         "compensation_supported": bool(compensation.get("supported")),
         "compensation_applied": bool(compensation.get("applied")),
         "compensation_latency_s": float(compensation.get("latency_s") or 0.0),
-        # The failure the policy choice is responsible for: it committed
-        # speculatively, verification said no, and nothing could undo it.
+        # Damage that survived. Requiring `damaged` matters: a verifier that
+        # falsely rejects a *correct* irreversible commit also leaves
+        # compensation refused, and counting that as a violation reported more
+        # violations than damaged states -- the commit was right and the
+        # verifier was wrong, so there was nothing to undo.
         "unrecoverable_violation": (
-            committed
-            and not approved
-            and not bool(compensation.get("applied"))
+            outcome == STATE_DAMAGED and not bool(compensation.get("applied"))
+        ),
+        # Damage attributable to the policy rather than to the verifier: these
+        # are plans verification rejected, which a conservative policy would
+        # never have committed at all.
+        "policy_induced_damage": (
+            outcome == STATE_DAMAGED and committed and not approved
         ),
     }
 
@@ -296,6 +303,7 @@ def aggregate_commit_barrier(records: list[dict[str, Any]]) -> dict[str, Any]:
         "commit_rate": rate("committed"),
         "state_correct_rate": rate("state_correct"),
         "unrecoverable_violation_rate": rate("unrecoverable_violation"),
+        "policy_induced_damage_rate": rate("policy_induced_damage"),
         "state_damaged_rate": rate("state_damaged"),
         "rejected_n": len(rejected),
         "compensation_invoked_n": len(attempted_recovery),

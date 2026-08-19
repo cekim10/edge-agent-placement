@@ -13,6 +13,7 @@ and build the op set from the records.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import random
 import time
@@ -278,19 +279,25 @@ def run_commit_barrier_workflow(
     verifier: Any,
     policy: str,
     injected_ops: list[dict[str, str]] | None = None,
+    concurrent_speculation: bool = False,
 ) -> dict[str, Any]:
     """classify -> plan -> commit, ordered by the commit policy.
 
     conservative  verify, then commit only if approved.
     speculative   commit immediately, verify in parallel, compensate on reject.
 
-    The speculative path is executed sequentially (commit, then verify, then
-    compensate) rather than with real threads. The verifier judges the *plan*,
-    so its verdict cannot depend on whether the commit has landed, which makes
-    the final state of the sequential order identical to true concurrency. State
-    and recoverability outcomes are therefore measured, not modelled; only the
-    latency composition assumes the overlap, and it is composed from measured
-    component times by the runner.
+    The verifier judges the *plan*, so its verdict cannot depend on whether the
+    commit has landed. Sequential and concurrent execution therefore reach the
+    same final state, and the state and recoverability outcomes are measured
+    either way.
+
+    What differs is the latency. Run sequentially, the overlap is composed as
+    `max(commit, verify)` by the runner -- an assumption, and the one the whole
+    speculative benefit rests on. `concurrent_speculation` runs the verifier on a
+    thread against the commit and records the wall clock of the overlapped
+    section as `t_overlap_measured`, so the assumption can be checked against
+    what the machine actually does: contention on the HTTP client, the GIL, or a
+    server that serialises requests would all show up as a gap.
     """
     if policy not in COMMIT_POLICIES:
         raise ValueError(f"unknown commit policy: {policy}")
@@ -307,6 +314,7 @@ def run_commit_barrier_workflow(
 
     initial_state = service.state()
     compensation: dict[str, Any] | None = None
+    overlap_measured: float | None = None
 
     if policy == "conservative":
         verify = verifier(predicted_ops)
@@ -315,6 +323,22 @@ def run_commit_barrier_workflow(
             if verify.approved
             else CommitResult(applied=False, error="rejected_by_verifier")
         )
+    elif concurrent_speculation:
+        overlap_started = time.perf_counter()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            verify_future = pool.submit(verifier, predicted_ops)
+            commit = service.commit(predicted_ops)
+            verify = verify_future.result()
+        overlap_measured = time.perf_counter() - overlap_started
+        if not verify.approved:
+            result = service.compensate(predicted_ops, instance.recoverability)
+            compensation = {
+                "invoked": True,
+                "supported": result.compensation_supported,
+                "applied": result.compensation_applied,
+                "error": result.error,
+                "latency_s": result.latency_s,
+            }
     else:
         commit = service.commit(predicted_ops)
         verify = verifier(predicted_ops)
@@ -335,6 +359,9 @@ def run_commit_barrier_workflow(
         "verify": verify.to_dict(),
         "committed": bool(commit.applied),
         "compensation": compensation,
+        # Wall clock of the commit/verify overlap when it was actually run
+        # concurrently; None when the run composed it instead.
+        "overlap_measured_s": overlap_measured,
         "initial_state": initial_state,
         "final_state": service.state(),
         "predicted_classification": classify.parsed,

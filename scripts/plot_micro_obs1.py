@@ -155,7 +155,7 @@ def _load_metrics_from_cell_csv(path: Path) -> list[dict[str, Any]]:
         n = sum(int(row["n"]) for row in cells)
 
         def weighted_mean(key: str) -> float:
-            return sum(float(row[key]) * int(row["n"]) for row in cells) / n
+            return sum(float(row.get(key) or 0.0) * int(row["n"]) for row in cells) / n
 
         entry = {
             "label": label,
@@ -170,6 +170,9 @@ def _load_metrics_from_cell_csv(path: Path) -> list[dict[str, Any]]:
             "plan_partial_recall": weighted_mean("plan_partial_recall"),
             "unrequested_destructive_rate": weighted_mean("unrequested_destructive_rate"),
             "mean_unrequested_destructive_ops": weighted_mean("mean_unrequested_destructive_ops"),
+            # Added after this loader was first written; absent in older runs.
+            "mean_expected_destructive_ops": weighted_mean("mean_expected_destructive_ops"),
+            "mean_effective_destructive_ops": weighted_mean("mean_effective_destructive_ops"),
             "placement": cells[0]["placement"].split(","),
             "by_cell": [
                 {
@@ -186,6 +189,8 @@ def _load_metrics_from_cell_csv(path: Path) -> list[dict[str, Any]]:
                     "plan_partial_recall": float(row["plan_partial_recall"]),
                     "unrequested_destructive_rate": float(row["unrequested_destructive_rate"]),
                     "mean_unrequested_destructive_ops": float(row["mean_unrequested_destructive_ops"]),
+                    "mean_expected_destructive_ops": float(row.get("mean_expected_destructive_ops") or 0.0),
+                    "mean_effective_destructive_ops": float(row.get("mean_effective_destructive_ops") or 0.0),
                 }
                 for row in cells
             ],
@@ -247,7 +252,11 @@ def figure_stage_rates(metrics: list[dict[str, Any]], out: Path) -> None:
 def figure_destructive_ops(metrics: list[dict[str, Any]], out: Path) -> None:
     data = _by_label(metrics)
     labels = [key for key in PLACEMENT_ORDER if key in data]
-    destructive = [data[key]["mean_unrequested_destructive_ops"] for key in labels]
+    destructive = [
+        data[key].get("mean_effective_destructive_ops")
+        or data[key]["mean_unrequested_destructive_ops"]
+        for key in labels
+    ]
     # The legitimate irreversible workload. It is a property of the request set,
     # not of the placement, so it is one reference line rather than a series --
     # and without it "0.95 incorrect ops" has no scale.
@@ -364,7 +373,7 @@ def write_table(metrics: list[dict[str, Any]], out: Path) -> None:
     """Table view, so nothing in the figures is carried by color alone."""
     data = _by_label(metrics)
     lines = [
-        "| placement | n | classify | plan exact | e2e | schema | destructive ops/req |",
+        "| placement | n | classify | plan exact | e2e | schema | incorrect irrev. ops/req |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for key in PLACEMENT_ORDER:
@@ -377,7 +386,7 @@ def write_table(metrics: list[dict[str, Any]], out: Path) -> None:
             f"{entry['plan_exact_rate']:.3f} | "
             f"{entry['end_to_end_success_rate']:.3f} [{low:.2f}, {high:.2f}] | "
             f"{entry['schema_violation_rate']:.3f} | "
-            f"{entry['mean_unrequested_destructive_ops']:.2f} |"
+            f"{entry.get('mean_effective_destructive_ops') or entry['mean_unrequested_destructive_ops']:.2f} |"
         )
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

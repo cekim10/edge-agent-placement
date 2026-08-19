@@ -4,17 +4,32 @@
 Takes one or more micro_obs3 run directories and prints, per recoverability
 class, the safety outcome and the commit cost at which speculation stops losing.
 
-The crossover is in commit cost, not RTT. Verification crosses the network under
-both policies, so both curves have slope 1 in RTT and never cross; what
-speculation hides is the commit. Algebraically, with `a` the approval rate and
-`m` the rate at which compensation actually ran:
+Thresholds
+----------
+With `a` the approval rate, `c` the commit round trip, `v` the verification
+latency (including any RTT it crosses), and `r` the rate at which compensation
+succeeds once it runs, the compensation rate is `m = (1 - a) * r` -- a function
+of `a`, not a constant. Writing it as a constant makes the tie look like `a = m`,
+which is wrong.
 
-    speculative - conservative = commit * (m - a)        for commit <= verify
+    conservative = v + c * a
+    speculative  = max(c, v) + c * m
 
-so speculation wins exactly when compensation runs less often than approval
-does. For an irreversible operation compensation refuses at no cost, `m` is 0,
-and speculation is *always* the faster policy -- which is the trap: it is fastest
-because it never even tries to undo the damage it caused.
+  c <= v:  delta = c * (m - a) = c * [r - a(1 + r)]   ->  a* = r / (1 + r)
+  c >  v:  delta = c * (1 + m - a) - v                ->  a* = 1 - v / (c(1+r))
+
+The first has no `v` and no RTT in it: verification crosses the network under
+both policies, so the crossing cancels and the tie point cannot move with RTT.
+Only once the commit costs more than verification does speculation hide the
+verification behind it, and only then does RTT enter -- lowering `a*`, i.e.
+making speculation easier the further away the verifier is.
+
+Both forms reproduce the bisection over measured per-record components to within
+0.01 across commit costs of 0.5-6 s and RTT of 0-500 ms.
+
+For an irreversible operation compensation refuses at no cost, so `r` and hence
+`m` collapse toward 0, `a*` drops, and speculation looks *cheapest* exactly where
+it is most damaging: failed recovery costs nothing in time.
 """
 
 from __future__ import annotations

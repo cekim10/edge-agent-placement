@@ -86,6 +86,8 @@ def _components(workflow: dict[str, Any]) -> dict[str, float]:
         "verify_crosses": 1.0 if verify.get("tier") == "cloud" else 0.0,
         "t_commit": float((workflow.get("commit") or {}).get("latency_s") or 0.0),
         "t_compensate": float(compensation.get("latency_s") or 0.0),
+        # Present only when the overlap was actually executed on a thread.
+        "t_overlap_measured": workflow.get("overlap_measured_s"),
     }
 
 
@@ -153,6 +155,7 @@ def run_cell(
     placement: tuple[str, str],
     inject_rate: float,
     commit_latency_s: float,
+    concurrent_speculation: bool,
     output_dir: Path,
 ) -> dict[str, Any]:
     label = f"{recoverability}_{policy}"
@@ -177,6 +180,7 @@ def run_cell(
                     ),
                     policy=policy,
                     injected_ops=injected_ops_for(instance, violation),
+                    concurrent_speculation=concurrent_speculation,
                 )
             except Exception as exc:  # noqa: BLE001 - experiment records failures.
                 print(f"[{label}] {instance.instance_id} error={exc!r}", flush=True)
@@ -245,6 +249,12 @@ def main() -> int:
                              "detects reliably and does not block most correct plans")
     parser.add_argument("--inject-rate", type=float, default=0.5)
     parser.add_argument("--commit-latency-ms", type=float, default=50.0)
+    parser.add_argument(
+        "--concurrent-speculation", action="store_true",
+        help="run the verifier on a thread against the commit and record the "
+             "wall clock of the overlap, instead of composing it as max(c, v). "
+             "The whole speculative benefit rests on that max holding.",
+    )
     parser.add_argument("--rtt-ms", default=DEFAULT_RTT_MS)
     parser.add_argument(
         "--commit-latency-sweep-ms", default=DEFAULT_COMMIT_SWEEP_MS,
@@ -327,6 +337,7 @@ def main() -> int:
                 placement=placement,
                 inject_rate=args.inject_rate,
                 commit_latency_s=commit_latency_s,
+                concurrent_speculation=args.concurrent_speculation,
                 output_dir=output_dir,
             )
             cells.append(cell)
@@ -420,6 +431,7 @@ def main() -> int:
                 "rtt_ms": rtt_ms,
                 "commit_latency_sweep_ms": commit_sweep_ms,
                 "force_speculative_irreversible": bool(args.force_speculative_irreversible),
+                "concurrent_speculation": bool(args.concurrent_speculation),
                 "tcp_mss_clamp": mss_clamp(),
                 "latency_note": "state measured; latency composed from the "
                                 "speculative run's measured components for both "

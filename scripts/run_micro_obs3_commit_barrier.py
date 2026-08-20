@@ -59,7 +59,8 @@ from edge_agent.microbench.scorer import (  # noqa: E402
     aggregate_commit_barrier,
     score_commit_barrier,
 )
-from edge_agent.microbench.service import AccessControlService  # noqa: E402
+from edge_agent.microbench.service import AccessControlService
+from edge_agent.microbench.service_http import RemoteAccessControlService  # noqa: E402
 from edge_agent.microbench.verifier import make_verifier  # noqa: E402
 from edge_agent.microbench.workflow import (  # noqa: E402
     COMMIT_POLICIES,
@@ -156,11 +157,17 @@ def run_cell(
     inject_rate: float,
     commit_latency_s: float,
     concurrent_speculation: bool,
+    commit_endpoint: str | None,
     output_dir: Path,
 ) -> dict[str, Any]:
     label = f"{recoverability}_{policy}"
     path = output_dir / f"{label}.jsonl"
-    service = AccessControlService(commit_latency_s=commit_latency_s)
+    # A real endpoint replaces the simulated round trip entirely: `c` is then
+    # measured rather than declared, and `commit_latency_s` would double-charge.
+    service: Any = (
+        RemoteAccessControlService(commit_endpoint) if commit_endpoint
+        else AccessControlService(commit_latency_s=commit_latency_s)
+    )
     records: list[dict[str, Any]] = []
 
     with path.open("w", encoding="utf-8") as handle:
@@ -250,6 +257,12 @@ def main() -> int:
     parser.add_argument("--inject-rate", type=float, default=0.5)
     parser.add_argument("--commit-latency-ms", type=float, default=50.0)
     parser.add_argument(
+        "--commit-endpoint", default=None,
+        help="host:port of a service_http instance. Commits then cross a real "
+             "network and are made durable, so `c` is measured instead of "
+             "simulated; --commit-latency-ms is ignored.",
+    )
+    parser.add_argument(
         "--concurrent-speculation", action="store_true",
         help="run the verifier on a thread against the commit and record the "
              "wall clock of the overlap, instead of composing it as max(c, v). "
@@ -338,6 +351,7 @@ def main() -> int:
                 inject_rate=args.inject_rate,
                 commit_latency_s=commit_latency_s,
                 concurrent_speculation=args.concurrent_speculation,
+                commit_endpoint=args.commit_endpoint,
                 output_dir=output_dir,
             )
             cells.append(cell)
@@ -432,6 +446,8 @@ def main() -> int:
                 "commit_latency_sweep_ms": commit_sweep_ms,
                 "force_speculative_irreversible": bool(args.force_speculative_irreversible),
                 "concurrent_speculation": bool(args.concurrent_speculation),
+                "commit_endpoint": args.commit_endpoint,
+                "commit_measured": bool(args.commit_endpoint),
                 "tcp_mss_clamp": mss_clamp(),
                 "latency_note": "state measured; latency composed from the "
                                 "speculative run's measured components for both "

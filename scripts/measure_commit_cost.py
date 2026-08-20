@@ -60,7 +60,7 @@ def measure(
     injected_delay_s: float,
 ) -> dict[str, list[float]]:
     samples: dict[str, list[float]] = {
-        "total": [], "server": [], "durability": [], "network": []
+        "total": [], "server": [], "durability": [], "network": [], "request_read": []
     }
     for _ in range(repeats):
         for instance in instances:
@@ -80,6 +80,7 @@ def measure(
             samples["server"].append(timings.total_s - timings.durability_s)
             samples["durability"].append(timings.durability_s)
             samples["network"].append(observed - timings.total_s)
+            samples["request_read"].append(timings.read_s)
     return samples
 
 
@@ -105,6 +106,12 @@ def report(label: str, samples: dict[str, list[float]], verify_s: float) -> None
         f"{percentile(total, 0.50)*1000:>9.2f}m"
         f"{percentile(total, 0.95)*1000:>9.2f}m"
     )
+    # Counted inside `server`, printed separately: it is the tell for a request
+    # that was still in flight while the server sat in read(). Milliseconds here
+    # mean the number above is measuring the network, not the service.
+    read = samples.get("request_read") or [0.0]
+    flag = "" if statistics.mean(read) < 0.002 else "   <-- stall: see docstring"
+    print(f"  ({'of which req read':<18}{statistics.mean(read)*1000:>7.2f}ms){flag}")
     ratio = mean_total / verify_s if verify_s else float("nan")
     regime = "c <= v (commit hides behind verification)" if ratio <= 1 else \
              "c > v (verification hides behind the commit)"

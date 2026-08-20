@@ -55,10 +55,20 @@ class ServerTimings:
 
     total_s: float = 0.0
     durability_s: float = 0.0
+    read_s: float = 0.0
 
 
 class CommitServiceHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"  # keep-alive, so `c` is not a TCP handshake
+
+    # Nagle plus the peer's delayed ACK is a 40 ms trap here, and it is a trap
+    # that looks exactly like a slow commit. The default handler writes headers
+    # and body as two sends; the second is small, so Nagle holds it until the
+    # first is acknowledged, and Linux acknowledges on a 40 ms timer. Measuring
+    # `c` that way reported 83 ms on loopback -- almost all of it this stall,
+    # twice, once per direction. Disabling Nagle and writing each response in a
+    # single send removes both halves.
+    disable_nagle_algorithm = True
 
     service: AccessControlService
     journal_path: Path
@@ -79,8 +89,10 @@ class CommitServiceHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        # end_headers() would flush the header buffer on its own; appending the
+        # body to that buffer first makes the whole response one write.
+        self._headers_buffer.append(b"\r\n" + body)
         self.end_headers()
-        self.wfile.write(body)
 
     @staticmethod
     def _flush(fileno: int) -> None:
@@ -128,6 +140,7 @@ class CommitServiceHandler(BaseHTTPRequestHandler):
         except (ValueError, OSError):
             self._send_json({"error": "bad_request"}, status=400)
             return
+        read_s = time.perf_counter() - started
 
         if self.path == "/reset":
             with self.lock:
@@ -157,6 +170,11 @@ class CommitServiceHandler(BaseHTTPRequestHandler):
             "compensation_applied": result.compensation_applied,
             "server_s": time.perf_counter() - started,
             "durability_s": durability_s,
+            # Time spent reading the request off the socket. Work this small
+            # cannot take milliseconds, so a non-trivial value here means the
+            # request was still arriving -- a network symptom wearing a server
+            # label, which is exactly how the Nagle stall first presented.
+            "read_s": read_s,
         })
 
 
@@ -199,8 +217,10 @@ class _ClampedCommitConnection(http.client.HTTPConnection):
         if clamp <= 0:
             _ClampedCommitConnection.clamp_applied = False
             super().connect()
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             return
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, clamp)
             _ClampedCommitConnection.clamp_applied = True
@@ -276,6 +296,7 @@ class RemoteAccessControlService:
         self.last_timings = ServerTimings(
             total_s=float(data.get("server_s", 0.0)),
             durability_s=float(data.get("durability_s", 0.0)),
+            read_s=float(data.get("read_s", 0.0)),
         )
         return CommitResult(
             applied=bool(data.get("applied")),

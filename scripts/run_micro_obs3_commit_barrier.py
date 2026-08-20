@@ -37,6 +37,7 @@ measured count of permanent damage.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import csv
 import json
 import sys
@@ -169,6 +170,7 @@ def run_cell(
         else AccessControlService(commit_latency_s=commit_latency_s)
     )
     records: list[dict[str, Any]] = []
+    failures: Counter[str] = Counter()
 
     with path.open("w", encoding="utf-8") as handle:
         for index, instance in enumerate(instances, start=1):
@@ -190,12 +192,14 @@ def run_cell(
                     concurrent_speculation=concurrent_speculation,
                 )
             except Exception as exc:  # noqa: BLE001 - experiment records failures.
+                failures[type(exc).__name__ + ": " + str(exc)[:160]] += 1
                 print(f"[{label}] {instance.instance_id} error={exc!r}", flush=True)
                 handle.write(json.dumps({"ok": False, "instance_id": instance.instance_id,
                                          "error": repr(exc)}) + "\n")
                 continue
 
             if workflow["predicted_ops"] is None:
+                failures["no_plan"] += 1
                 handle.write(json.dumps({"ok": False, "instance_id": instance.instance_id,
                                          "error": "no_plan"}) + "\n")
                 continue
@@ -237,6 +241,8 @@ def run_cell(
         "recoverability": recoverability,
         "policy": policy,
         "records_path": str(path),
+        "attempted": len(instances),
+        "failures": dict(failures),
         **aggregate_commit_barrier(records),
         "_records": records,
     }
@@ -354,6 +360,25 @@ def main() -> int:
                 commit_endpoint=args.commit_endpoint,
                 output_dir=output_dir,
             )
+            if not cell["n"]:
+                # Every instance in the cell failed. Continuing would burn the
+                # remaining cells against the same broken dependency and leave a
+                # run directory that looks like a result, so stop and name the
+                # cause instead.
+                print(
+                    f"\n{cell['label']}: 0 of {cell['attempted']} instances "
+                    "produced a record. Most common failures:",
+                    flush=True,
+                )
+                for reason, count in Counter(cell["failures"]).most_common(3):
+                    print(f"  {count:>4}x  {reason}", flush=True)
+                print(
+                    "\nNothing was measured. Check that the model endpoints and, if "
+                    "--commit-endpoint was given, the commit service are reachable "
+                    "from this host.",
+                    flush=True,
+                )
+                return 1
             cells.append(cell)
             print(
                 f"{cell['label']}: state_correct={cell['state_correct_rate']:.3f} "

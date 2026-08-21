@@ -84,14 +84,25 @@ def load_plans(run_dirs: list[Path], min_ops: int) -> list[dict[str, Any]]:
     return plans
 
 
-def ask(client: Any, tier: str, messages: list[dict[str, str]]) -> tuple[bool, float]:
+def ask(client: Any, tier: str, messages: list[dict[str, str]]) -> tuple[bool, float, bool]:
+    """(approved, seconds, parse_failed).
+
+    A parse failure is reported rather than folded into a verdict. The workflow
+    verifier fails open on unparseable output, which is the right call there --
+    a broken auditor should not block the pipeline. Here it would be a
+    measurement error: a per-operation prompt that the model answers badly would
+    show up as a verifier that approves everything, and look like high accuracy
+    on correct plans.
+    """
     started = time.perf_counter()
     output = client.chat(
         tier=tier, stage="verify", messages=messages, guided_json=VERIFY_SCHEMA
     )
     latency = time.perf_counter() - started
-    parsed = parse_json_object(output)
-    return bool(parsed.get("approved")) if parsed else False, latency
+    parsed, parse_error = parse_json_object(output)
+    if parse_error is not None or parsed is None:
+        return False, latency, True
+    return bool(parsed.get("approved")), latency, False
 
 
 def main() -> int:
@@ -125,19 +136,23 @@ def main() -> int:
         ops = record["workflow"]["predicted_ops"]
         view = record_view(instance)
         try:
-            whole, t_whole = ask(client, args.tier, _verify_prompt(instance, ops, view))
-            _, t_whole_last = ask(
+            whole, t_whole, bad_whole = ask(
+                client, args.tier, _verify_prompt(instance, ops, view)
+            )
+            _, t_whole_last, _ = ask(
                 client, args.tier, _verify_prompt(instance, ops, view, ops_last=True)
             )
             per_op: list[bool] = []
             t_ops: list[float] = []
+            bad_ops = 0
             for position, op in enumerate(ops, start=1):
-                approved, latency = ask(
+                approved, latency, bad = ask(
                     client, args.tier,
                     _verify_op_prompt(instance, op, view, position, len(ops)),
                 )
                 per_op.append(approved)
                 t_ops.append(latency)
+                bad_ops += int(bad)
         except Exception as exc:  # noqa: BLE001 - a failed plan is data, not a crash
             print(f"  [{index}/{len(plans)}] {record['instance_id']} error={exc!r}",
                   flush=True)
@@ -156,6 +171,8 @@ def main() -> int:
             # What the edge would wait for before committing the first operation,
             # against what it waits for now.
             "t_first_op": t_ops[0],
+            "parse_failed_whole": bad_whole,
+            "parse_failed_ops": bad_ops,
         })
         print(f"  [{index}/{len(plans)}] {record['instance_id']} ops={len(ops)} "
               f"whole={whole} per_op={per_op} correct={rows[-1]['plan_correct']} "
@@ -206,6 +223,11 @@ def report(rows: list[dict[str, Any]]) -> None:
         false_rej = (sum(1 for r in right if not r[key]) / len(right)) if right else float("nan")
         print(f"  {label:<22}{correct/n:>10.3f}{detect:>11.3f}{false_rej:>14.3f}")
     print(f"  (n wrong={len(wrong)}, n correct={len(right)})")
+    bad_w = sum(1 for r in rows if r["parse_failed_whole"])
+    bad_o = sum(r["parse_failed_ops"] for r in rows)
+    if bad_w or bad_o:
+        print(f"  unparseable verdicts: whole {bad_w}/{n}, per-op {bad_o}/{len(each)}"
+              "  <- counted as reject; a large number here invalidates the row above")
 
     print(f"\n=== 3. plan-global residue ===")
     missed = [r for r in wrong if r["conjunction"]]

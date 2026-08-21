@@ -191,6 +191,94 @@ def tie_point(entry: dict[str, Any]) -> tuple[float, float, float] | None:
     return (r / (1 + r), low / (1 + low), high / (1 + high))
 
 
+def figure_single(
+    cells: dict[str, dict[str, dict[str, Any]]], recoverability: str, out: Path
+) -> None:
+    """One class, full width: the bridge between placement and policy.
+
+    The three-panel version answers "does this hold across recoverability
+    classes". This one answers the single question a reader of the motivation
+    needs settled -- whether moving one stage can carry a workflow across the
+    line where the optimal commit policy changes -- and it answers it with the
+    class where both sides of the crossing are resolved.
+    """
+    configure_plot_style()
+    fig, ax = plt.subplots(figsize=(6.4, 4.6))
+    points = cells.get(recoverability, {})
+    positions = list(range(len(PLACEMENT_ORDER)))
+
+    ties = [(i, tie_point(points[p]))
+            for i, p in enumerate(PLACEMENT_ORDER) if p in points]
+    tie_x = [i for i, t in ties if t is not None]
+    tie_y = [t[0] for _i, t in ties if t is not None]
+    tie_lo = [t[1] for _i, t in ties if t is not None]
+    tie_hi = [t[2] for _i, t in ties if t is not None]
+
+    # Name the two half-planes rather than leaving the reader to derive which
+    # side means what. The shading is the weaker cue and the words are the
+    # stronger one, so the figure survives being read quickly.
+    ceiling = 1.16
+    if tie_x:
+        ax.fill_between(tie_x, tie_y, ceiling, color=BLUE, alpha=0.10, zorder=0)
+        ax.fill_between(tie_x, 0.0, tie_y, color=ORANGE, alpha=0.10, zorder=0)
+        ax.fill_between(tie_x, tie_lo, tie_hi, color=INK, alpha=0.16, zorder=1)
+        ax.plot(tie_x, tie_y, color=INK, linestyle="--", linewidth=2.2, zorder=2)
+        ax.text(
+            len(positions) - 0.6, tie_y[-1] + 0.05, "speculate", ha="right",
+            va="bottom", fontsize=ANNOTATION_FONT_SIZE + 2, color=BLUE, style="italic",
+        )
+        ax.text(
+            len(positions) - 0.6, tie_y[-1] - 0.05, "verify first", ha="right",
+            va="top", fontsize=ANNOTATION_FONT_SIZE + 2, color=ORANGE, style="italic",
+        )
+        ax.text(
+            -0.4, tie_y[0] + 0.02, f"$a^*$ = {tie_y[0]:.2f}", ha="left", va="bottom",
+            fontsize=ANNOTATION_FONT_SIZE + 1, color=INK,
+        )
+
+    xs, ys, los, his = [], [], [], []
+    for index, placement in enumerate(PLACEMENT_ORDER):
+        entry = points.get(placement)
+        if entry is None:
+            continue
+        low, high = wilson(entry["a"], entry["n"])
+        xs.append(index); ys.append(entry["a"])
+        los.append(max(0.0, entry["a"] - low)); his.append(max(0.0, high - entry["a"]))
+    ax.plot(xs, ys, color=GRAY, linewidth=2.0, zorder=3)
+    for x, y, lo, hi in zip(xs, ys, los, his):
+        tie = tie_point(points[PLACEMENT_ORDER[x]])
+        above = tie is None or y > tie[0]
+        ax.errorbar(
+            x, y, yerr=[[lo], [hi]], fmt="o", markersize=11,
+            color=BLUE if above else ORANGE,
+            markerfacecolor=(BLUE if above else "white"),
+            markeredgecolor=BLUE if above else ORANGE, markeredgewidth=2.4,
+            ecolor=GRAY, elinewidth=1.8, capsize=4, zorder=4,
+        )
+        # n varies by a factor of four across placements, which is most of why
+        # the intervals differ in width. Hiding that would make the two wide
+        # points look like noisier measurements of the same thing.
+        ax.text(
+            x, y - lo - 0.045, f"n={points[PLACEMENT_ORDER[x]]['n']}",
+            ha="center", va="top", fontsize=ANNOTATION_FONT_SIZE - 1, color=GRAY,
+        )
+
+    ax.set_xlim(-0.5, len(positions) - 0.5)
+    ax.set_ylim(0.0, ceiling)
+    ax.set_xticks(positions)
+    ax.set_xticklabels([PLACEMENT_LABEL[p] for p in PLACEMENT_ORDER],
+                       fontsize=TICK_FONT_SIZE + 1)
+    ax.tick_params(axis="y", labelsize=TICK_FONT_SIZE + 1)
+    ax.set_ylabel("approval rate $a$", fontsize=AXIS_LABEL_FONT_SIZE + 1, labelpad=8)
+    ax.set_xlabel("stage placement", fontsize=AXIS_LABEL_FONT_SIZE + 1, labelpad=8)
+    finish_paper_axes(ax)
+    fig.subplots_adjust(left=0.155, right=0.975, bottom=0.165, top=0.965)
+    fig.savefig(out.with_suffix(".pdf"), dpi=300)
+    fig.savefig(out.with_suffix(".png"), dpi=300)
+    plt.close(fig)
+    print(f"wrote {out.with_suffix('.pdf')}")
+
+
 def figure(cells: dict[str, dict[str, dict[str, Any]]], out: Path) -> None:
     configure_plot_style()
     fig, axes = plt.subplots(1, len(CLASS_ORDER), figsize=WIDE_SIZE, sharey=True)
@@ -319,7 +407,12 @@ def main() -> int:
         help="zero-injection micro_obs3 runs, one per placement",
     )
     parser.add_argument(
-        "--out", type=Path, default=ROOT / "figures" / "fig_obs4_placement_boundary",
+        "--only-class", choices=CLASS_ORDER, default=None,
+        help="draw one class full width as the motivation bridge figure. "
+             "compensable is the one whose crossing is resolved on both sides.",
+    )
+    parser.add_argument(
+        "--out", type=Path, default=None,
     )
     args = parser.parse_args()
 
@@ -327,8 +420,16 @@ def main() -> int:
     if not any(cells.values()):
         print("no usable runs")
         return 1
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    figure(cells, args.out)
+    default_name = (
+        f"fig_obs4_boundary_{args.only_class}" if args.only_class
+        else "fig_obs4_placement_boundary"
+    )
+    out = args.out or (ROOT / "figures" / default_name)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if args.only_class:
+        figure_single(cells, args.only_class, out)
+    else:
+        figure(cells, out)
     table(cells)
     return 0
 

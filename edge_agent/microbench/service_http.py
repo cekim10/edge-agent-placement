@@ -40,6 +40,7 @@ import os
 import sys
 import socket
 import threading
+import urllib.parse
 import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -56,6 +57,9 @@ class ServerTimings:
     total_s: float = 0.0
     durability_s: float = 0.0
     read_s: float = 0.0
+    #: True when the service reported that this invocation paid to start a new
+    #: execution environment. Only serverless deployments set it.
+    cold: bool = False
 
 
 class CommitServiceHandler(BaseHTTPRequestHandler):
@@ -129,7 +133,16 @@ class CommitServiceHandler(BaseHTTPRequestHandler):
                 self._send_json({"state": self.service.state()})
             return
         if self.path == "/health":
-            self._send_json({"ok": True, "durable": self.durable})
+            # `nagle_disabled` exists so a stale server is a fact rather than a
+            # guess. A process started before this fix keeps running happily and
+            # answers /health identically otherwise, while adding 40 ms to every
+            # commit -- which reads as a slow network, not as an old binary.
+            self._send_json({
+                "ok": True,
+                "durable": self.durable,
+                "nagle_disabled": bool(self.disable_nagle_algorithm),
+                "single_write_response": True,
+            })
             return
         self._send_json({"error": "not_found"}, status=404)
 
@@ -237,6 +250,16 @@ class _ClampedCommitConnection(http.client.HTTPConnection):
         self.sock = sock
 
 
+class _ClampedCommitConnectionHTTPS(http.client.HTTPSConnection):
+    """TLS variant. No MSS clamp: the clamp works around one cluster's MTU, and
+    a serverless endpoint is reached over the public internet where path MTU
+    discovery is not black-holed."""
+
+    def connect(self) -> None:
+        super().connect()
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+
 class RemoteAccessControlService:
     """Client with the same surface as AccessControlService.
 
@@ -250,9 +273,14 @@ class RemoteAccessControlService:
     """
 
     def __init__(self, endpoint: str, *, timeout_s: float = 30.0) -> None:
-        host, _, port = endpoint.removeprefix("http://").partition(":")
-        self.host = host
-        self.port = int(port or "80")
+        parsed = urllib.parse.urlsplit(
+            endpoint if "://" in endpoint else f"http://{endpoint}"
+        )
+        self.tls = parsed.scheme == "https"
+        self.host = parsed.hostname or ""
+        self.port = parsed.port or (443 if self.tls else 80)
+        # A Function URL may carry a stage prefix; keep it in front of the route.
+        self.prefix = parsed.path.rstrip("/")
         self.timeout_s = timeout_s
         self._local = threading.local()
         self.last_timings = ServerTimings()
@@ -263,9 +291,10 @@ class RemoteAccessControlService:
         existing = getattr(self._local, "connection", None)
         if existing is not None:
             return existing
-        connection = _ClampedCommitConnection(
-            self.host, self.port, timeout=self.timeout_s
+        factory = (
+            _ClampedCommitConnectionHTTPS if self.tls else _ClampedCommitConnection
         )
+        connection = factory(self.host, self.port, timeout=self.timeout_s)
         self._local.connection = connection
         return connection
 
@@ -275,7 +304,7 @@ class RemoteAccessControlService:
         for attempt in (1, 2):
             connection = self._connection()
             try:
-                connection.request("POST", path, body=body, headers=headers)
+                connection.request("POST", self.prefix + path, body=body, headers=headers)
                 response = connection.getresponse()
                 return json.loads(response.read().decode("utf-8"))
             except (http.client.HTTPException, OSError):
@@ -297,6 +326,7 @@ class RemoteAccessControlService:
             total_s=float(data.get("server_s", 0.0)),
             durability_s=float(data.get("durability_s", 0.0)),
             read_s=float(data.get("read_s", 0.0)),
+            cold=bool(data.get("cold", False)),
         )
         return CommitResult(
             applied=bool(data.get("applied")),
@@ -309,9 +339,27 @@ class RemoteAccessControlService:
     def reset(self, state: dict[str, Any]) -> None:
         self._post("/reset", {"state": state})
 
+    def close(self) -> None:
+        """Drop this thread's connection, so the next call reconnects.
+
+        Used to measure a cold path: a kept-alive connection would otherwise
+        reuse the same warm execution environment on the other end.
+        """
+        connection = getattr(self._local, "connection", None)
+        if connection is not None:
+            try:
+                connection.close()
+            finally:
+                self._local.connection = None
+
+    def health(self) -> dict[str, Any]:
+        connection = self._connection()
+        connection.request("GET", self.prefix + "/health")
+        return json.loads(connection.getresponse().read().decode("utf-8"))
+
     def state(self) -> dict[str, Any]:
         connection = self._connection()
-        connection.request("GET", "/state")
+        connection.request("GET", self.prefix + "/state")
         response = connection.getresponse()
         return json.loads(response.read().decode("utf-8"))["state"]
 

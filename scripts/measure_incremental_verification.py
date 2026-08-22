@@ -167,14 +167,25 @@ def floor_prompts(
 
 def run_floor_probe(
     client: Any, tier: str, plans: list[dict[str, Any]], repeats: int
-) -> dict[str, list[float]]:
-    samples: dict[str, list[float]] = {"minimal": [], "tables": [], "full": []}
+) -> dict[str, dict[str, list[float]]]:
+    """Times per arm, split into the first call on a prompt and the repeats.
+
+    The split is not bookkeeping. Repeating a prompt hits the server's prefix
+    cache, and averaging the two together reports a number that belongs to no
+    deployment: every instance in the real workflow carries its own record
+    tables, so every verification prefills them from cold. Pooling one cold call
+    with four warm ones put the record tables at 0.21 s when the cold cost is
+    0.68 s, which flipped the verdict this probe exists to produce.
+    """
+    samples: dict[str, dict[str, list[float]]] = {
+        name: {"cold": [], "warm": []} for name in ("minimal", "tables", "full")
+    }
     for index, record in enumerate(plans, start=1):
         instance = AccessInstance(**record["instance"])
         view = record_view(instance)
         op = record["workflow"]["predicted_ops"][0]
         arms = floor_prompts(instance, op, view)
-        for _ in range(repeats):
+        for attempt in range(repeats):
             for name, messages in arms.items():
                 started = time.perf_counter()
                 try:
@@ -183,16 +194,18 @@ def run_floor_probe(
                 except Exception as exc:  # noqa: BLE001
                     print(f"  [{index}] {name} error={exc!r}", flush=True)
                     continue
-                samples[name].append(time.perf_counter() - started)
+                bucket = "cold" if attempt == 0 else "warm"
+                samples[name][bucket].append(time.perf_counter() - started)
         print(f"  [{index}/{len(plans)}] {record['instance_id']} "
               + "  ".join(
-                  f"{k}={statistics.mean(v):.3f}s" for k, v in samples.items() if v),
+                  f"{k}={statistics.mean(v['cold']):.3f}s" for k, v in samples.items()
+                  if v["cold"]),
               flush=True)
     return samples
 
 
-def report_floor(samples: dict[str, list[float]]) -> None:
-    if not all(samples.values()):
+def report_floor(samples: dict[str, dict[str, list[float]]]) -> None:
+    if not all(v["cold"] for v in samples.values()):
         print("floor probe produced no usable samples")
         return
 
@@ -200,15 +213,22 @@ def report_floor(samples: dict[str, list[float]]) -> None:
         return sorted(values)[int(0.95 * (len(values) - 1))]
 
     print("\n=== verification latency floor ===")
-    print(f"  {'arm':<10}{'n':>5}{'mean':>10}{'p50':>10}{'p95':>10}")
-    print("  " + "-" * 45)
+    print(f"  {'arm':<10}{'n':>5}{'cold mean':>12}{'cold p95':>11}"
+          f"{'warm mean':>12}{'cache saves':>13}")
+    print("  " + "-" * 63)
     for name in ("minimal", "tables", "full"):
-        values = samples[name]
-        print(f"  {name:<10}{len(values):>5}{statistics.mean(values):>9.3f}s"
-              f"{statistics.median(values):>9.3f}s{p95(values):>9.3f}s")
-    floor = statistics.mean(samples["minimal"])
-    table_cost = statistics.mean(samples["tables"]) - floor
-    predicate_cost = statistics.mean(samples["full"]) - statistics.mean(samples["tables"])
+        cold, warm = samples[name]["cold"], samples[name]["warm"]
+        warm_mean = statistics.mean(warm) if warm else float("nan")
+        saved = statistics.mean(cold) - warm_mean if warm else float("nan")
+        print(f"  {name:<10}{len(cold):>5}{statistics.mean(cold):>11.3f}s"
+              f"{p95(cold):>10.3f}s{warm_mean:>11.3f}s{saved:>12.3f}s")
+
+    floor = statistics.mean(samples["minimal"]["cold"])
+    table_cost = statistics.mean(samples["tables"]["cold"]) - floor
+    predicate_cost = (statistics.mean(samples["full"]["cold"])
+                      - statistics.mean(samples["tables"]["cold"]))
+    print("\n  Cold is the deployment-relevant column: each instance carries its own"
+          "\n  record tables, so no verification reuses another's prefix.")
     print(f"\n  irreducible floor (network + model + a few tokens)  {floor:>7.3f} s")
     print(f"  record tables add                                  {table_cost:>+7.3f} s")
     print(f"  the rest of the checklist adds                     {predicate_cost:>+7.3f} s")
@@ -223,6 +243,10 @@ def report_floor(samples: dict[str, list[float]]) -> None:
               "\n     attacks a term that is not there.")
     else:
         print("  -> mixed: some room, but less than the fixed cost.")
+    print("\n  NOTE these arms return {approved} only. The workflow verifier also"
+          "\n  generates a reason string; the gap between the `full` arm here and a"
+          "\n  real verification is that decoding, and it is not prefill -- no amount"
+          "\n  of context shrinking touches it.")
 
 
 def main() -> int:

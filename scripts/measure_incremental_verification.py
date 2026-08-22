@@ -105,6 +105,126 @@ def ask(client: Any, tier: str, messages: list[dict[str, str]]) -> tuple[bool, f
     return bool(parsed.get("approved")), latency, False
 
 
+#: Just the verdict, no reason string. Every floor-probe arm then generates the
+#: same handful of tokens, so a difference between arms is prefill and nothing
+#: else. The full schema's free-text reason varies in length between prompts and
+#: would leak decoding time into the comparison.
+FLOOR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"approved": {"type": "boolean"}},
+    "required": ["approved"],
+    "additionalProperties": False,
+}
+
+
+def floor_prompts(
+    instance: AccessInstance, op: dict[str, str], view: tuple[str, str]
+) -> dict[str, list[dict[str, str]]]:
+    """Three arms that differ only in how much context they carry.
+
+    minimal   one operation, one predicate, no record tables
+    tables    the same, plus the USERS and ASSIGNMENTS tables
+    full      the same, plus the whole plan checklist
+
+    `tables - minimal` is what a residual-only verifier could stop sending;
+    `full - tables` is what dropping predicates could save. `minimal` itself is
+    the floor neither can go below: network, model start-up, and a few tokens.
+    """
+    user_lines, assignment_lines = view
+    policy = instance.policy
+    predicate = (
+        "Does this operation grant "
+        f"{policy.get('forbidden_role_on_protected')} on a protected resource "
+        f"({', '.join(policy.get('protected_resources', ()))})? If so reject."
+    )
+    checklist = [
+        "Approve only if the operation does exactly what the request asks:",
+        "  - it targets the person the request names, not a similar one;",
+        "  - it acts on the resource the request names;",
+        "  - it is an operation the request calls for;",
+        "  - it does not remove or add anything the request did not ask for;",
+        f"  - {predicate}",
+    ]
+    op_line = f"OPERATION: {json.dumps(op, sort_keys=True)}"
+    request = f"REQUEST: {instance.request}"
+    answer = 'Return {"approved": true|false}.'
+    tables = [
+        "USERS:", user_lines,
+        "ASSIGNMENTS (user_id|resource|role):", assignment_lines,
+    ]
+    system = {"role": "system",
+              "content": "You audit access-control operations. Return JSON only."}
+
+    def build(lines: list[str]) -> list[dict[str, str]]:
+        return [system, {"role": "user", "content": "\n".join(lines)}]
+
+    return {
+        "minimal": build([predicate, request, op_line, answer]),
+        "tables": build([predicate, request] + tables + [op_line, answer]),
+        "full": build(checklist + [request] + tables + [op_line, answer]),
+    }
+
+
+def run_floor_probe(
+    client: Any, tier: str, plans: list[dict[str, Any]], repeats: int
+) -> dict[str, list[float]]:
+    samples: dict[str, list[float]] = {"minimal": [], "tables": [], "full": []}
+    for index, record in enumerate(plans, start=1):
+        instance = AccessInstance(**record["instance"])
+        view = record_view(instance)
+        op = record["workflow"]["predicted_ops"][0]
+        arms = floor_prompts(instance, op, view)
+        for _ in range(repeats):
+            for name, messages in arms.items():
+                started = time.perf_counter()
+                try:
+                    client.chat(tier=tier, stage="verify", messages=messages,
+                                guided_json=FLOOR_SCHEMA)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  [{index}] {name} error={exc!r}", flush=True)
+                    continue
+                samples[name].append(time.perf_counter() - started)
+        print(f"  [{index}/{len(plans)}] {record['instance_id']} "
+              + "  ".join(
+                  f"{k}={statistics.mean(v):.3f}s" for k, v in samples.items() if v),
+              flush=True)
+    return samples
+
+
+def report_floor(samples: dict[str, list[float]]) -> None:
+    if not all(samples.values()):
+        print("floor probe produced no usable samples")
+        return
+
+    def p95(values: list[float]) -> float:
+        return sorted(values)[int(0.95 * (len(values) - 1))]
+
+    print("\n=== verification latency floor ===")
+    print(f"  {'arm':<10}{'n':>5}{'mean':>10}{'p50':>10}{'p95':>10}")
+    print("  " + "-" * 45)
+    for name in ("minimal", "tables", "full"):
+        values = samples[name]
+        print(f"  {name:<10}{len(values):>5}{statistics.mean(values):>9.3f}s"
+              f"{statistics.median(values):>9.3f}s{p95(values):>9.3f}s")
+    floor = statistics.mean(samples["minimal"])
+    table_cost = statistics.mean(samples["tables"]) - floor
+    predicate_cost = statistics.mean(samples["full"]) - statistics.mean(samples["tables"])
+    print(f"\n  irreducible floor (network + model + a few tokens)  {floor:>7.3f} s")
+    print(f"  record tables add                                  {table_cost:>+7.3f} s")
+    print(f"  the rest of the checklist adds                     {predicate_cost:>+7.3f} s")
+    removable = table_cost + predicate_cost
+    print(f"\n  a residual-only verifier could remove at most       {removable:>7.3f} s")
+    print(f"  leaving                                            {floor:>7.3f} s")
+    if removable >= 0.5:
+        print("  -> prefill dominates: shrinking what crosses the boundary is worth doing.")
+    elif removable <= 0.2:
+        print("  -> the floor is network and model start-up, not context. Sending less"
+              "\n     cannot move verification latency much; predicate decomposition"
+              "\n     attacks a term that is not there.")
+    else:
+        print("  -> mixed: some room, but less than the fixed cost.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path, nargs="+")
@@ -114,6 +234,13 @@ def main() -> int:
     parser.add_argument("--tier", default="cloud")
     parser.add_argument("--timeout-s", type=float, default=300.0)
     parser.add_argument("--verify-max-tokens", type=int, default=256)
+    parser.add_argument(
+        "--floor-probe", action="store_true",
+        help="skip the per-op comparison and instead decompose one verification "
+             "into floor / record tables / checklist, to find how much of the "
+             "latency any context-shrinking mechanism could actually remove.",
+    )
+    parser.add_argument("--floor-repeats", type=int, default=5)
     parser.add_argument("--out", type=Path,
                         default=ROOT / "outputs" / "incremental_verification.json")
     args = parser.parse_args()
@@ -129,6 +256,17 @@ def main() -> int:
     print(f"{len(plans)} plans, tier={args.tier}, "
           f"op counts {dict(Counter(len(p['workflow']['predicted_ops']) for p in plans))}",
           flush=True)
+
+    if args.floor_probe:
+        samples = run_floor_probe(client, args.tier, plans, args.floor_repeats)
+        report_floor(samples)
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.with_name(args.out.stem + "_floor.json").write_text(
+                json.dumps(samples, indent=2)
+            )
+            print(f"\nwrote {args.out.with_name(args.out.stem + '_floor.json')}")
+        return 0
 
     rows: list[dict[str, Any]] = []
     for index, record in enumerate(plans, start=1):
